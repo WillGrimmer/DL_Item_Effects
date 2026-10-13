@@ -1,0 +1,16 @@
+[project]
+name = "dl-item-effects"
+version = "0.1.0"
+description = "Causal item-choice effects for Deadlock: sequential target-trial emulation + multi-arm AIPW"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

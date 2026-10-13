@@ -1,0 +1,90 @@
+[
+  {
+    "id": 1999680326,
+    "name": "Card Trick",
+    "class_name": "citadel_ability_card_toss",
+    "type": "ability",
+    "item_slot_type": null,
+    "item_tier": null,
+    "cost": null,
+    "is_active_item": null,
+    "shopable": null
+  },
+  {
+    "id": 1842576017,
+    "name": "Full Auto",
+    "class_name": "citadel_ability_wraith_rapidfire",
+    "type": "ability",
+    "item_slot_type": null,
+    "item_tier": null,
+    "cost": null,
+    "is_active_item": null,
+    "shopable": null
+  },
+  {
+    "id": 2462046703,
+    "name": "Golden Goose Egg",
+    "class_name": "upgrade_goose_egg",
+    "type": "upgrade",
+    "item_slot_type": "spirit",
+    "item_tier": 1,
+    "cost": 800,
+    "is_active_item": true,
+    "shopable": true
+  },
+  {
+    "id": 1009965641,
+    "name": "Monster Rounds",
+    "class_name": "upgrade_non_player_bonus",
+    "type": "upgrade",
+    "item_slot_type": "weapon",
+    "item_tier": 1,
+    "cost": 800,
+    "is_active_item": false,
+    "shopable": true
+  },
+  {
+    "id": 84321454,
+    "name": "Quicksilver Reload",
+    "class_name": "upgrade_quick_silver",
+    "type": "upgrade",
+    "item_slot_type": "spirit",
+    "item_tier": 2,
+    "cost": 1600,
+    "is_active_item": false,
+    "shopable": true
+  },
+  {
+    "id": 709540378,
+    "name": "Cultist Sacrifice",
+    "class_name": "upgrade_non_player_bonus_sacrifice",
+    "type": "upgrade",
+    "item_slot_type": "weapon",
+    "item_tier": 3,
+    "cost": 3200,
+    "is_active_item": true,
+    "shopable": true
+  },
+  {
+    "id": 2480592370,
+    "name": "Ricochet",
+    "class_name": "upgrade_ricochet",
+    "type": "upgrade",
+    "item_slot_type": "weapon",
+    "item_tier": 4,
+    "cost": 6400,
+    "is_active_item": false,
+    "shopable": true
+  },
+  {
+    "id": 876563814,
+    "name": "Spirit Lifesteal",
+    "class_name": "upgrade_health_stealing_magic",
+    "type": "upgrade",
+    "item_slot_type": "vitality",
+    "item_tier": 2,
+    "cost": 1600,
+    "is_active_item": false,
+    "shopable": true
+  }
+]

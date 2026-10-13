@@ -1,0 +1,34 @@
+# Data (never commit pulled match data or feature tables)
+data/raw/*
+data/interim/*
+data/processed/*
+!data/**/.gitkeep
+
+
+# Secrets / config
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Models / large artifacts
+models/
+*.joblib
+*.pkl
+*.lgb
+*.txt.model
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
