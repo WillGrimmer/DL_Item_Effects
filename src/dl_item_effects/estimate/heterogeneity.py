@@ -1,9 +1,12 @@
 """Effect curves over game time, and shrinkage for rankings (PLAN.md §3.3-3.4).
 
-``dr_curve`` is Kennedy's DR-learner second stage: regress the doubly-robust pseudo-outcome
-for "arm k vs alternatives" on a spline basis in game time, with a match-clustered sandwich
-covariance. That gives one smooth curve with honest pointwise bands, replacing v1's
-overlapping windows (whose per-point maximum, the "ideal timing", was biased upward).
+``dr_curve`` is the DR-learner second stage (Kennedy 2023; Semenova & Chernozhukov 2021):
+regress the doubly-robust pseudo-outcome on a spline basis in game time, with a
+match-clustered sandwich covariance. That gives one smooth curve with pointwise bands,
+replacing v1's overlapping windows (whose per-point maximum, the "ideal timing", was biased
+upward). For the headline estimand ("vs what they actually bought") the curve is a ratio of
+two spline fits on the same basis, ``E[psi_k - Y | t] / P(A != k | t)``, with a delta-method
+band from their joint clustered sandwich.
 
 ``empirical_bayes`` shrinks a family of noisy estimates toward their precision-weighted mean
 (normal-normal, DerSimonian-Laird variance). Rankings are read off the shrunk values, so a
@@ -14,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .aipw import MultiArmFit, vs_alternatives_scores
+from .aipw import MultiArmFit, vs_actual_scores, vs_alternatives_scores
 
 
 def _spline_basis(t: np.ndarray, knots: np.ndarray, degree: int = 3):
@@ -25,23 +28,42 @@ def _spline_basis(t: np.ndarray, knots: np.ndarray, degree: int = 3):
 
 
 def dr_curve(fit: MultiArmFit, k: int, t: np.ndarray, grid: np.ndarray,
-             n_knots: int = 6) -> pd.DataFrame:
-    """Smooth effect of arm k vs alternatives as a function of ``t`` (e.g. game_time_s)."""
-    rows, d = vs_alternatives_scores(fit, k)
+             n_knots: int = 6, estimand: str = "vs_actual") -> pd.DataFrame:
+    """Smooth effect of arm k as a function of ``t`` (e.g. game_time_s).
+
+    ``estimand``: "vs_actual" (the headline) or "vs_alternatives" (a uniformly random
+    supported alternative).
+    """
+    if estimand == "vs_actual":
+        rows, d, other = vs_actual_scores(fit, k)
+        ys = np.column_stack([d, other])
+    elif estimand == "vs_alternatives":
+        rows, d = vs_alternatives_scores(fit, k)
+        ys = d[:, None]
+    else:
+        raise ValueError(f"unknown estimand {estimand!r}")
     tt = np.asarray(t, dtype=float)[rows]
     g = fit.groups[rows]
-    knots = np.quantile(tt, np.linspace(0, 1, n_knots))
-    knots = np.unique(knots)
+    knots = np.unique(np.quantile(tt, np.linspace(0, 1, n_knots)))
     st = _spline_basis(tt, knots)
     B = st.transform(tt.reshape(-1, 1))
     BtB_inv = np.linalg.pinv(B.T @ B)
-    beta = BtB_inv @ B.T @ d
-    resid = d - B @ beta
-    S = pd.DataFrame(B * resid[:, None]).groupby(g).sum().to_numpy()
-    V = BtB_inv @ (S.T @ S) @ BtB_inv
+    beta = BtB_inv @ B.T @ ys                       # (p, m): one column per regression
+    resid = ys - B @ beta
+    # stacked clustered sandwich over all m regressions (they share rows and clusters)
+    scores = np.hstack([B * resid[:, [j]] for j in range(ys.shape[1])])
+    S = pd.DataFrame(scores).groupby(g).sum().to_numpy()
+    bread = np.kron(np.eye(ys.shape[1]), BtB_inv)
+    V = bread @ (S.T @ S) @ bread
     Bg = st.transform(np.clip(grid, knots[0], knots[-1]).reshape(-1, 1))
-    est = Bg @ beta
-    se = np.sqrt(np.einsum("ij,jk,ik->i", Bg, V, Bg))
+    if ys.shape[1] == 1:
+        est = Bg @ beta[:, 0]
+        grad = Bg
+    else:
+        num, den = Bg @ beta[:, 0], Bg @ beta[:, 1]
+        est = num / den
+        grad = np.hstack([Bg / den[:, None], -Bg * (num / den ** 2)[:, None]])
+    se = np.sqrt(np.einsum("ij,jk,ik->i", grad, V, grad))
     return pd.DataFrame(dict(t=grid, effect=est, se=se,
                              ci_lo=est - 1.96 * se, ci_hi=est + 1.96 * se))
 

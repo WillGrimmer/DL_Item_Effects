@@ -310,17 +310,36 @@ def extract_window(patch: str, end: date | None = None, out_dir: str | Path | No
     files = lake.base_files(manifest)
     parts = lake.partitions_for_window(con, files, start, end)
     hist_parts = lake.partitions_for_window(con, files, start - timedelta(days=lookback_days), end)
-    (out_dir / "_sources.json").write_text(json.dumps({
-        "patch": patch, "start": start.isoformat(), "end": end.isoformat(),
-        "git_commit": _git_commit(), "manifest_version": manifest.get("version"),
-        "partitions": parts, "history_partitions": hist_parts,
-        "files": {p: files[p] for p in sorted(set(parts) | set(hist_parts))},
-    }, indent=1))
+    src_file = out_dir / "_sources.json"
+    sources = json.loads(src_file.read_text()) if src_file.exists() else {}
+    sources.update(patch=patch, start=start.isoformat(), end=end.isoformat(),
+                   partitions=parts, history_partitions=hist_parts)
+    sources.setdefault("runs", []).append(
+        {"git_commit": _git_commit(), "manifest_version": manifest.get("version"),
+         "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    sources.setdefault("part_files", {})
+    src_file.write_text(json.dumps(sources, indent=1))
+
+    def with_fresh_files(fn):
+        """Recent partitions are rebuilt about hourly under new keys and the old file
+        disappears; on a 404, re-read the manifest and retry."""
+        nonlocal files
+        for attempt in range(3):
+            try:
+                return fn(files)
+            except duckdb.HTTPException:
+                if attempt == 2:
+                    raise
+                files = lake.base_files(lake.fetch_manifest())
 
     hist = out_dir / "_history.parquet"
     if not hist.exists():
         t0 = time.monotonic()
-        build_history([files[p] for p in hist_parts], hist, con=con)
+        tmp = hist.with_suffix(".tmp")
+        with_fresh_files(lambda f: build_history([f[p] for p in hist_parts], tmp, con=con))
+        tmp.replace(hist)
+        sources["history_files"] = [files[p] for p in hist_parts]
+        src_file.write_text(json.dumps(sources, indent=1))
         print(f"history: partitions {hist_parts[0]}-{hist_parts[-1]}, "
               f"{time.monotonic() - t0:.0f} s", flush=True)
     outs = []
@@ -329,9 +348,12 @@ def extract_window(patch: str, end: date | None = None, out_dir: str | Path | No
         if not out.exists():
             t0 = time.monotonic()
             tmp = out.with_suffix(".tmp")
-            build_purchase_events([files[p]], tmp, history=hist, patches=patches, start=start,
-                                  end=end, max_matches=max_matches, con=con, decoder=decoder)
+            with_fresh_files(lambda f: build_purchase_events(
+                [f[p]], tmp, history=hist, patches=patches, start=start, end=end,
+                max_matches=max_matches, con=con, decoder=decoder))
             tmp.replace(out)
+            sources["part_files"][str(p)] = files[p]
+            src_file.write_text(json.dumps(sources, indent=1))
             n = con.execute(f"SELECT count(*), count(DISTINCT match_id) "
                             f"FROM read_parquet('{out.as_posix()}')").fetchone()
             print(f"part-{p}: {n[0]:,} rows, {n[1]:,} matches, "

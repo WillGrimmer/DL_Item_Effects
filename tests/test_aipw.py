@@ -3,8 +3,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import warnings
+
 from dl_item_effects.estimate import (benjamini_hochberg, dr_curve, empirical_bayes,
-                                      fit_multiarm, pairwise, vs_alternatives)
+                                      effect_table, fit_multiarm, pairwise, vs_actual,
+                                      vs_alternatives)
 
 TRUE = np.array([0.04, 0.0, -0.02])     # win-prob shift from choosing arm 0 / 1 / 2
 
@@ -54,7 +57,7 @@ def test_vs_alternatives_ordering(fit):
 def test_dr_curve_tracks_time_varying_effect():
     X, A, Y, elig, g, t = simulate(time_varying=True, seed=3)
     f = fit_multiarm(X, A, Y, elig, g, learner="logistic")
-    cur = dr_curve(f, 0, t, np.array([0.15, 0.85]))
+    cur = dr_curve(f, 0, t, np.array([0.15, 0.85]), estimand="vs_alternatives")
     # arm 0 vs average of arms 1,2 = eff0 - (-0.01); slope 0.08 over t
     truth = 0.08 * (np.array([0.15, 0.85]) - 0.5) + 0.04 + 0.01
     assert (cur.ci_lo.to_numpy() <= truth).all() and (truth <= cur.ci_hi.to_numpy()).all()
@@ -72,3 +75,59 @@ def test_empirical_bayes_shrinks_noisy_extremes():
 def test_bh_monotone_and_bounded():
     q = benjamini_hochberg([0.001, 0.04, 0.03, 0.5])
     assert (q >= np.array([0.001, 0.04, 0.03, 0.5])).all() and q.max() <= 1
+
+
+def _vs_actual_truth(fit, k=0):
+    """E[Y(k) - Y | A != k] on supported rows: effects are constant shifts in this DGP."""
+    rows = fit.support[:, k] & (fit.A != k)
+    return TRUE[k] - TRUE[fit.A[rows]].mean()
+
+
+def test_vs_actual_recovers_truth(fit):
+    for k in range(3):
+        r = vs_actual(fit, k)
+        assert r["ci_lo"] <= _vs_actual_truth(fit, k) <= r["ci_hi"], (k, r)
+    tab = effect_table(fit)
+    assert list(tab.arm) == [0, 1, 2] and (tab.n_other > 0).all()
+
+
+def test_vs_actual_curve_tracks_time_varying_effect():
+    X, A, Y, elig, g, t = simulate(time_varying=True, seed=3)
+    f = fit_multiarm(X, A, Y, elig, g, learner="logistic")
+    grid = np.array([0.15, 0.85])
+    cur = dr_curve(f, 0, t, grid)
+    rows = f.support[:, 0] & (f.A != 0)
+    truth = 0.08 * (grid - 0.5) + TRUE[0] - TRUE[f.A[rows]].mean()
+    assert (cur.ci_lo.to_numpy() <= truth).all() and (truth <= cur.ci_hi.to_numpy()).all()
+
+
+def test_crossover_shares_and_label(fit):
+    n = len(fit.A)
+    nb = np.full((n, 3), np.nan)
+    nb[:, 0] = np.where(np.arange(n) % 10 < 3, 120.0, np.nan)   # 30% buy arm 0 later
+    r = vs_actual(fit, 0, next_buy_s=nb)
+    assert abs(r["cross_by_end"] - 0.3) < 0.02 and r["crossover"] == "mixed"
+    assert r["cross_within"] == pytest.approx(r["cross_by_end"])
+
+
+def test_lgbm_handles_two_arms_and_missing_values():
+    X, A, Y, elig, g, _ = simulate(n=6000, seed=5)
+    keep = A < 2
+    X = X[keep].reset_index(drop=True)
+    X.loc[::7, "skill"] = np.nan
+    for learner in ("lgbm", "logistic"):
+        f = fit_multiarm(X, A[keep], Y[keep], elig[keep][:, :2], g[keep], learner=learner)
+        assert np.isfinite(pairwise(f, 0, 1)["effect"])
+
+
+def test_arm_missing_from_a_fold_counts_as_trimmed():
+    X, A, Y, elig, g, _ = simulate(n=6000, seed=7)
+    A = A.copy()
+    rare = np.flatnonzero(A == 2)[:3]
+    A[A == 2] = 1
+    A[rare] = 2                        # three rows of arm 2: some folds will have none
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        f = fit_multiarm(X, A, Y, elig, g, learner="logistic")
+    assert f.fold_absent and any("missing from a training fold" in str(x.message) for x in w)
+    assert f.trim_share[2] > 0.5
