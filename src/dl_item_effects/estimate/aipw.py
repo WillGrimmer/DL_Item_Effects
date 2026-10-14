@@ -32,20 +32,23 @@ import pandas as pd
 CROSSOVER_LABELS = ((0.25, "choice"), (0.50, "mixed"), (1.01, "order"))
 
 
-def make_learner(kind: str, seed: int):
-    """Classifier for propensities (multiclass) or outcomes (binary). Missing values are
-    median-imputed with indicators on the logistic path; LightGBM handles them natively and
-    picks binary or multiclass from the labels it sees."""
+def make_learner(kind: str, seed: int, regression: bool = False):
+    """Classifier for propensities (multiclass) and binary outcomes, or a regressor for
+    continuous outcomes (the in-game negative controls). Missing values are median-imputed
+    with indicators on the logistic/linear path; LightGBM handles them natively and picks
+    binary or multiclass from the labels it sees."""
     if kind == "logistic":
         from sklearn.impute import SimpleImputer
-        from sklearn.linear_model import LogisticRegression
+        from sklearn.linear_model import LogisticRegression, Ridge
         from sklearn.pipeline import make_pipeline
         from sklearn.preprocessing import StandardScaler
+        model = Ridge(alpha=1.0) if regression else LogisticRegression(max_iter=2000, C=1.0)
         return make_pipeline(SimpleImputer(strategy="median", add_indicator=True),
-                             StandardScaler(), LogisticRegression(max_iter=2000, C=1.0))
+                             StandardScaler(), model)
     if kind == "lgbm":
         import lightgbm as lgb
-        return lgb.LGBMClassifier(
+        cls = lgb.LGBMRegressor if regression else lgb.LGBMClassifier
+        return cls(
             n_estimators=400, learning_rate=0.05, num_leaves=31, min_child_samples=100,
             subsample=0.8, subsample_freq=1, colsample_bytree=0.8, reg_lambda=1.0,
             n_jobs=-1, random_state=seed, verbosity=-1)
@@ -73,9 +76,34 @@ class MultiArmFit:
         return 1 - self.support.sum(0) / np.maximum(self.elig.sum(0), 1)
 
 
+def fit_propensity(X: pd.DataFrame, A: np.ndarray, elig: np.ndarray, groups: np.ndarray,
+                   learner: str = "logistic", n_splits: int = 5, seed: int = 0) -> np.ndarray:
+    """Out-of-fold generalized propensities, restricted to buyable arms and renormalized.
+    Uses no outcome, so it can be fitted once on all rows and reused for any outcome."""
+    from sklearn.model_selection import GroupKFold
+
+    X = X.reset_index(drop=True)
+    A = np.asarray(A, dtype=int)
+    elig = np.asarray(elig, dtype=bool)
+    n, K = elig.shape
+    e = np.zeros((n, K))
+    for fold, (tr, te) in enumerate(GroupKFold(n_splits=n_splits).split(X, A, groups)):
+        prop = make_learner(learner, seed + fold)
+        prop.fit(X.iloc[tr], A[tr])
+        p = prop.predict_proba(X.iloc[te])
+        for col, k in enumerate(prop.classes_):
+            e[te, int(k)] = p[:, col]
+    e = np.where(elig, e, 0.0)
+    return e / np.maximum(e.sum(1, keepdims=True), 1e-12)
+
+
 def fit_multiarm(X: pd.DataFrame, A: np.ndarray, Y: np.ndarray, elig: np.ndarray,
                  groups: np.ndarray, arms: list | None = None, learner: str = "logistic",
-                 n_splits: int = 5, trim: float = 0.01, seed: int = 0) -> MultiArmFit:
+                 n_splits: int = 5, trim: float = 0.01, seed: int = 0,
+                 continuous: bool = False, e_hat: np.ndarray | None = None) -> MultiArmFit:
+    """Cross-fitted multi-arm AIPW. ``continuous`` fits regressors for the outcome (for
+    negative-control outcomes that are not win/loss). ``e_hat`` reuses out-of-fold
+    propensities (:func:`fit_propensity`) for these rows, so only outcome models are fitted."""
     from sklearn.model_selection import GroupKFold
 
     X = X.reset_index(drop=True)
@@ -84,16 +112,12 @@ def fit_multiarm(X: pd.DataFrame, A: np.ndarray, Y: np.ndarray, elig: np.ndarray
     elig = np.asarray(elig, dtype=bool)
     groups = np.asarray(groups)
     n, K = elig.shape
-    e = np.zeros((n, K))
     mu = np.full((n, K), np.nan)
     fold_absent = []
+    e = (fit_propensity(X, A, elig, groups, learner, n_splits, seed) if e_hat is None
+         else np.asarray(e_hat, dtype=float).copy())
 
     for fold, (tr, te) in enumerate(GroupKFold(n_splits=n_splits).split(X, A, groups)):
-        prop = make_learner(learner, seed + fold)
-        prop.fit(X.iloc[tr], A[tr])
-        p = prop.predict_proba(X.iloc[te])
-        for col, k in enumerate(prop.classes_):
-            e[te, int(k)] = p[:, col]
         for k in range(K):
             tk = tr[A[tr] == k]
             if len(tk) == 0:
@@ -103,11 +127,12 @@ def fit_multiarm(X: pd.DataFrame, A: np.ndarray, Y: np.ndarray, elig: np.ndarray
             if yk.min() == yk.max():
                 mu[te, k] = yk[0]
                 continue
-            m = make_learner(learner, seed + 100 * fold + k)
+            m = make_learner(learner, seed + 100 * fold + k, regression=continuous)
             m.fit(X.iloc[tk], yk)
-            mu[te, k] = m.predict_proba(X.iloc[te])[:, 1]
+            mu[te, k] = (m.predict(X.iloc[te]) if continuous
+                         else m.predict_proba(X.iloc[te])[:, 1])
 
-    # Restrict the generalized propensity to buyable arms and renormalize.
+    # Restrict the generalized propensity to buyable arms and renormalize (idempotent).
     e = np.where(elig, e, 0.0)
     e = e / np.maximum(e.sum(1, keepdims=True), 1e-12)
     support = elig & (e >= trim) & ~np.isnan(mu)

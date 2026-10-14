@@ -57,9 +57,10 @@ Source and column semantics: [`docs/data_dumps.md`](docs/data_dumps.md).
 - **No filter on anything that happens after a decision.** Matches with an abandon stay in.
 - **Patch windows.** Every table is for one patch. In hand now: 09-16-2026 (09-17 to 09-28,
   176k matches) and 09-29-2026 (09-30 onward, 205k matches by 10-12).
-- **Dev and confirm split.** Matches with `match_id % 5 == 0` are the dev set. Design tuning
-  looks only at the dev set and at falsification outputs. Win-outcome tables on the other 80%
-  are computed once, after the design is frozen, and the commit is recorded in the log.
+- **Dev and confirm split.** Matches whose splitmix64 hash of `match_id` is 0 modulo 5 are
+  the dev set (`pipeline.is_dev`). Raw match ids are not uniform modulo 5. Design tuning looks
+  only at the dev set and at falsification outputs. Win-outcome tables on the other 80% are
+  computed once, after the design is frozen, and the commit is recorded in the log.
 
 ### 3.2 Decision frame (`frame/risk_set.py`; built, changes pending in Phase 2)
 Every shop visit is a small trial (Hernán & Robins' target-trial framework, applied
@@ -179,8 +180,8 @@ principle.** An effect near zero is an allowed answer.
 |---|---|---|---|
 | 0 | Scaffold, design, ported plumbing | this repo; risk-set frame, multi-arm AIPW, DR curves, EB, BH; 21 tests | ✅ done 2026-10-13 |
 | 0b | Design checks against live data | `docs/design_checks_2026-10-13.md`, `docs/data_dumps.md`, this revision | ✅ done 2026-10-13 |
-| 1 | **Data** | `extract.py` on the new data lake: manifest-driven URLs, §3.1 filters, shop items from the assets API, drop same-click component rows, consumed flag and price paid, skill and lane columns, start-of-game state before 180 s, patch label from `start_time`, previous-match link, prior-interval souls and deaths. Extract both patch windows. | fixture test per new column; match counts within 2% of the volume table in `data_dumps.md` |
-| 2 | **Frame and estimator fixes** | visits, price paid, component eligibility, `sold >= t`; headline estimand; LightGBM with two arms; NaN handling; fold-absent arms counted in `trim_share`; explain the 0.2pp synthetic gap; enemy inventories and objectives | fixture tests for each; synthetic tests of §4.6 pass; crossover and power table for the first hero |
+| 1 | **Data** | `extract.py` on the new data lake: manifest-driven URLs, §3.1 filters, shop items from the assets API, drop same-click component rows, consumed flag and price paid, skill and lane columns, start-of-game state before 180 s, patch label from `start_time`, previous-match link, prior-interval souls and deaths. Extract both patch windows. | ✅ done 2026-10-13: 175,188 and 204,837 matches (−0.4% and −0.2% vs the volume table) |
+| 2 | **Frame and estimator fixes** | visits, price paid, component eligibility, `sold >= t`; headline estimand; LightGBM with two arms; NaN handling; fold-absent arms counted in `trim_share`; explain the 0.2pp synthetic gap; enemy inventories and objectives | ✅ done 2026-10-13: 59 tests; Haze tables in `data/processed/reports/` |
 | 3 | **First hero end to end** (Haze: most data in both windows) | effect table, pairwise matrix and DR curves at every price, each with its crossover label; logistic vs LightGBM; OVB bounds; wall time per (hero, price) | §4.1 to 4.4 pass on Haze; roster compute budget written down |
 | 4 | **Falsification suite** as code | `validate/` module: both negative controls, SE calibration, split-half, WPA baseline | runs per hero, writes a pass/fail report |
 | 5 | Roster | all heroes, FDR across the family, EB-shrunk "buy next" lists; Mirage reported as the low-power case | §4.1 to 4.4 pass for ≥80% of heroes; failures listed, not hidden |
@@ -193,9 +194,15 @@ principle.** An effect near zero is an allowed answer.
   client fetches patches.
 - `ingest/lake.py`, `ingest/patches.py`, `ingest/extract.py`: Phase 1 extraction on the new
   data lake, tested on a hand-built 12-player fixture and smoke-tested on 2,000 live matches.
-- `frame/risk_set.py`, `estimate/aipw.py`: built and tested on synthetic data. The defects to
-  fix are listed in design_checks §6.
-- `estimate/heterogeneity.py`, `estimate/fdr.py`: built.
+- `ingest/objectives.py`: objective losses and mid-boss claims per match.
+- `frame/risk_set.py`: visits, price-paid trials, component eligibility, crossover times,
+  enemy inventories, objectives. `frame/diagnostics.py`: the per-hero design table.
+- `estimate/aipw.py`: the headline, reusable propensities, continuous outcomes.
+  `estimate/heterogeneity.py`, `estimate/fdr.py`: built.
+- `pipeline.py`: loads a hero's window and builds full frames; `is_dev` is the split.
+- `analysis.py`: §4.1 to 4.4 and the OVB bounds. `phase3.py`: the dev, falsify and confirm
+  stages for one hero. Phase 4 generalizes these into a per-hero report and adds the WPA
+  baseline.
 
 Not ported from v1: the global win-prob model, the benchmark, the windowed decision frame, and
 every cached table and page.
@@ -211,6 +218,15 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-13**: Phase 2 done. Haze design tables: 42 arms in the 09-16 window (31 "choice",
+  9 "mixed", 2 "order") and 38 in the 09-29 window (24, 12, 2). Burst Fire and Swift Striker
+  are "order" in both. Optimistic 95% half-widths are 0.36pp to 1.5pp. The 0.2pp simulation gap
+  was Monte Carlo noise from shared seeds, not bias.
+- **2026-10-13**: Dev split is a splitmix64 hash of `match_id`, not `match_id % 5`. Raw ids are
+  not uniform modulo 5 (31k to 40k matches per residue) and the residue shifts mean rank.
+- **2026-10-13**: Phase 1 done. An independent re-derivation of 2,000 live matches matched
+  every column. It found that components two levels down an upgrade chain were not credited
+  (547 of 391k purchases); fixed before the full extraction.
 - **2026-10-13**: Phase 1 code done: manifest-driven extraction (`ingest/lake.py`,
   `ingest/patches.py`, `ingest/extract.py`), price paid, start-of-game state of 600 souls and
   level 1 (measured), previous-match link, prior-interval negative controls. 12-player Ranked

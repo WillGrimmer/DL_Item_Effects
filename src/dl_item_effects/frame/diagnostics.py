@@ -51,7 +51,8 @@ def hero_events(patch: str, hero_id: int, events_dir: str | Path | None = None) 
     if not files:
         raise FileNotFoundError(f"no extracted partitions in {d}")
     paths = "[" + ", ".join(f"'{f.as_posix()}'" for f in files) + "]"
-    con = duckdb.connect(config={"enable_progress_bar": False})
+    con = duckdb.connect()
+    con.execute("SET enable_progress_bar = false")
     return con.execute(
         f"SELECT * FROM read_parquet({paths}) WHERE hero_id = {int(hero_id)}").df()
 

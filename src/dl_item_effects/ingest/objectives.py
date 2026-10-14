@@ -12,10 +12,13 @@ objective, or claimed the mid boss), ``kind`` and ``t`` (seconds):
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+import argparse
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import duckdb
+
+from .. import config
 
 KINDS = ("t1", "t2", "base", "mid")
 
@@ -64,3 +67,45 @@ def build_objectives(source_urls: list[str], out_path: str | Path,
     SELECT * FROM obj UNION ALL SELECT * FROM mid ORDER BY match_id, t
     ) TO '{out.as_posix()}' (FORMAT PARQUET)""")
     return out
+
+
+def extract_objectives_window(patch: str, end: date | None = None,
+                              out_dir: str | Path | None = None,
+                              con: duckdb.DuckDBPyConnection | None = None,
+                              patches: list[tuple[str, date]] | None = None) -> Path:
+    """``_objectives.parquet`` for one patch window, next to its purchase events."""
+    from . import lake
+    from .extract import connect
+    from .patches import load_patches, patch_window
+
+    con = con or connect()
+    patches = patches or load_patches()
+    start, last = patch_window(patches, patch)
+    end = end or last or (datetime.now(timezone.utc).date() - timedelta(days=1))
+    out_dir = Path(out_dir or (config.PROCESSED_DIR / "events" / f"patch_{patch}"))
+    out = out_dir / "_objectives.parquet"
+    tmp = out.with_suffix(".tmp")
+    files = lake.base_files(lake.fetch_manifest())
+    parts = lake.partitions_for_window(con, files, start, end)
+    for attempt in range(3):          # rebuilt partitions 404 under their old key
+        try:
+            build_objectives([files[p] for p in parts], tmp, start=start, end=end, con=con)
+            break
+        except duckdb.HTTPException:
+            if attempt == 2:
+                raise
+            files = lake.base_files(lake.fetch_manifest())
+    tmp.replace(out)
+    return out
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description="Extract objective events for one patch window.")
+    ap.add_argument("--patch", required=True)
+    ap.add_argument("--end", type=date.fromisoformat)
+    a = ap.parse_args(argv)
+    print(extract_objectives_window(a.patch, end=a.end))
+
+
+if __name__ == "__main__":
+    main()

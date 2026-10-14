@@ -128,9 +128,11 @@ def decision_frame(events: pd.DataFrame, price: int, arms: list[int] | None = No
     n_multi = int(cand[n_in_visit > 1].drop_duplicates(visit).shape[0])
     df = cand[n_in_visit == 1].copy()
 
-    # state at the start of the visit: the visit's first purchase, at any price
+    # state at the start of the visit: the visit's first purchase, at any price. The in-game
+    # negative-control outcomes are aligned the same way (they are never covariates).
     first = events.sort_values("game_time_s", kind="stable").drop_duplicates(visit)
-    state = [c for c in STATE_COLUMNS + ["assigned_lane"] if c in events.columns]
+    state = [c for c in STATE_COLUMNS + ["assigned_lane", "nc_prior_souls", "nc_prior_deaths",
+                                         "nc_prior_len_s"] if c in events.columns]
     df = df.drop(columns=state).merge(first[visit + state], on=visit, how="left")
     df["game_time_s"] = df["visit_start"]
 
