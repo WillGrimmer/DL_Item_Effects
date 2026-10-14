@@ -175,6 +175,100 @@ on average. The shuffled values spread with an SD of about 0.25pp per frame, wid
 nominal fixed-effect SEs (0.18 to 0.27), because a frame's arms share rows and are not
 independent. Even against that empirical noise, the gap is about 3 SEs.
 
+### Recommendation (a sub-agent's decision memo, 2026-10-14; not yet accepted by Will)
+
+**Q1. Apply §4.1 and §4.4 once per hero and window, pooled over prices, for every hero.**
+Log this before any confirm-stage result and keep the thresholds. Don't adopt TOST: it would
+be a new, much stricter threshold (chance of passing with zero bias 0% to 44%).
+- The pooled reading follows the frozen text: §4.1 says "across a hero's arms", §4.4 says "two
+  random halves of a window", and PLAN §5 judges heroes, not frames.
+- Applied per frame, with all four prices required to pass, a design with zero confounding
+  fails §4.1 in 95% of windows and §4.4 in 55% to 76%.
+- Pooled, the chance-fail rates are about 20% for §4.1 (mostly the τ ≤ 0.3pp part) and 6% to
+  12% for §4.4, if the SEs are exact.
+- The pooled §4.1 rate is very sensitive to the SEs: about 50% if they are 10% too small, and
+  26% to 28% with an arm correlation of 0.1. The eight shuffles are consistent with the
+  nominal SEs (SD factor 1.16, 95% CI 0.78 to 2.21), but that is not conclusive.
+- §4.1 fails either way (pooled DerSimonian-Laird: 09-16 μ −0.34pp, τ 0.14pp; 09-29 μ
+  −0.20pp, τ 0.56pp).
+- §4.4 flips to a pass under pooling. The log must say this was decided after seeing results.
+  Per-frame flags stay reported, and **Extra Spirit (09-29, 800, split-half z −4.02, about
+  0.005 to see by chance among 80 arms) must be explained before confirm.**
+
+**Q2. Change the design first; keep calibration only as a fallback Will chooses if the rerun
+fails, and then widen by τ, never shift.**
+- Data checks on Haze 09-29 (128,698 player-matches, all linked to the history; `nc_prev_won`
+  matches the history in 100% of rows):
+  - 88% have at least 5 earlier Ranked matches and 79% at least 10.
+  - Within each win-streak level, players with 7 to 10 wins in matches 2 to 11 back win 5.5pp
+    more often than those with 0 to 3. History carries about 2.5 times win streak's signal.
+  - Games in the last 24 hours barely matter.
+  - Win streak is not the previous result: P(previous won) is 0.83 when the streak is above
+    0 and 0.16 when it is 0.
+- **The proposed "two matches back" control would be absorbed** by a last-5 win-rate
+  covariate: given the previous result and the last-5 wins, its mean is determined to within
+  0.5pp. Do not use it.
+- Why not calibrate now:
+  - PLAN widens by τ after a pass; using it to absorb a fail repeats the v1 mistake.
+  - The control ran without win streak, so −0.3pp is not the production model's bias.
+  - The bias varies by arm, so one shift is wrong for most arms.
+
+**Spec for the next agent (if Will accepts):**
+1. New covariates from the window's `_history.parquet`, per account, ordered by
+   (start_time, match_id), using strictly earlier matches and excluding the current one:
+   - `prev_won`: the previous match's result.
+   - `wr_2_6`, `wr_2_11`: win rate over matches 2 to 6 and 2 to 11 back, among those
+     available; NaN if none.
+   - `n_hist`: number of earlier matches, capped at 11.
+   - `games_24h`: Ranked matches started in the previous 24 hours.
+   - plus the existing `prev_gap_h`.
+   - Tests: the current match is excluded, ties are handled, the cap works.
+2. Production model: all of the above plus `win_streak`.
+3. §4.1 keeps its outcome (the previous result) and thresholds, applied pooled per Q1, and
+   runs without `win_streak` and `prev_won`. History starts two matches back, so the outcome
+   stays outside the covariate window.
+4. A diagnostic decided now, not a gate: the *next* Ranked match's result, with the full
+   production covariate set. 92% of rows have one.
+5. Rerun `--stage falsify` (lgbm) for both windows with new propensity tags, and rerun the
+   shuffle on the new control. Save per-row influence values and add a match-resampling
+   bootstrap (also clustered by account) for honest pooled SEs and the rule's real
+   chance-fail rate.
+
+How to read the rerun:
+- §4.1 passes: widen intervals by τ and go on.
+- §4.1 fails but the next-match diagnostic is about zero: the link is to the last result
+  itself (for example tilt), which the production model adjusts for. That goes to Will; it is
+  not a pass.
+- Both fail: Will decides before confirm whether to stop or report calibrated intervals.
+
+Proposed PLAN §8 entry (from the memo, for Will to accept or edit):
+
+> 2026-10-1x: §4.1 and §4.4 are applied once per hero and window, pooled over prices, as
+> their wording says (per frame they fail by chance in 95% and 55 to 76% of windows). Decided
+> after seeing Haze's falsification statistics but before any confirm result, for all heroes.
+> It turns Haze's §4.4 into a pass; per-frame flags stay reported. Thresholds are unchanged.
+> For the previous-match shift: add player-history covariates (previous result, win rate over
+> matches 2 to 6 and 2 to 11 back, history count, games in 24 hours). §4.1 keeps its outcome
+> and runs without win streak or the previous result; the next-match result is a diagnostic;
+> calibrate only if this fails.
+
+**Risks the memo flags:**
+- Smaller heroes would fail pooled §4.1 by chance about 45% of the time (median hero) and 65%
+  (Mirage) even with exact SEs. Phase 5's "at least 80% of heroes pass" looks unreachable,
+  so decide that before the next hero runs.
+- The shuffle cannot catch bias that arises from the product of the two models' errors; a
+  semi-synthetic null would.
+- Experience on the hero is a plausible confounder, but `_history.parquet` has no `hero_id`.
+  Add it in the same change or not at all.
+- Not verified: the bootstrap; the cost of rebuilding the history; why win streak and the
+  previous result disagree in about 17% of rows; any check on the 09-16 window.
+
+**Anomaly to check:** the shuffled 09-29 6400 frame's precision-weighted mean is exactly
+1e-8. Its arm effects range from −1.5pp to +1.1pp, and the weighted sum cancels to 2e-5 of its
+largest term, which no other frame does. Most likely the LightGBM outcome models collapse to
+near-constant predictions on a pure-noise outcome. Inspect `fit.mu` for that frame before
+relying on `--stage shuffle`.
+
 ## 8. Data on disk (all git-ignored, under `data/`)
 
 | Path | Contents |
@@ -212,7 +306,7 @@ at the edges. `_sources.json` says what was used.
 
 ## 10. Next steps
 
-1. Get Will's answers to §7.
+1. Get Will's answers to §7. A recommendation and an implementation spec are already in §7.
 2. If the shift is real: add the player-history covariates (in `ingest/extract.py`'s history
    join or as a frame step), add the deeper negative control, and rerun `--stage falsify`
    for Haze. Cached propensities are keyed by covariate set and frame size, so delete the
