@@ -96,3 +96,8 @@ def test_next_match_diagnostic_and_pooled_split_half(frame):
     z = pd.DataFrame(dict(arm=range(20), z=[0.0] * 18 + [2.5, -3.0]))
     s = analysis.pooled_split_half(z)
     assert s["share_beyond"] == 0.1 and s["passed"] and s["n_arms"] == 20
+
+
+def test_semisynthetic_null_is_near_zero(frame):
+    r = analysis.nc_player_semisynthetic(frame, np.ones(len(frame), bool), seed=4)
+    assert abs(r["mu"]) < 0.01 and r["p_sd"] >= 0

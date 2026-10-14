@@ -180,6 +180,41 @@ def nc_player_shuffled(df: pd.DataFrame, rows: np.ndarray, learner: str = "logis
     return nc_player(df.assign(nc_prev_won=key.map(shuffled)), rows, learner, e_all=e_all)
 
 
+def nc_player_semisynthetic(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
+                            e_all: np.ndarray | None = None, seed: int = 1,
+                            outcome: str = "nc_prev_won",
+                            drop: tuple[str, ...] = NC_PLAYER_DROP) -> dict:
+    """§4.1 on a semi-synthetic outcome: one draw per (match, account) from Bernoulli(p), with
+    p the out-of-fold prediction of ``outcome`` from the covariates alone (one pooled model,
+    no arm), averaged over that player-match's rows. The true effect of every arm is zero, but
+    the covariates predict the outcome as strongly as they predict the real one, so unlike
+    the shuffle this catches bias from the nuisance models' errors."""
+    from sklearn.model_selection import GroupKFold
+
+    from .estimate.aipw import make_learner
+
+    r = np.asarray(rows, dtype=bool) & df[outcome].notna().to_numpy()
+    cols = [c for c in covariate_columns(df) if c not in drop]
+    sub = df.loc[r]
+    X = sub[cols].astype({c: "float32" for c in cols if sub[c].dtype == bool}).reset_index(drop=True)
+    y = sub[outcome].to_numpy(dtype=int)
+    p = np.zeros(len(sub))
+    for fold, (tr, te) in enumerate(GroupKFold(n_splits=5).split(X, y, sub["match_id"])):
+        m = make_learner(learner, seed + 1000 + fold)
+        m.fit(X.iloc[tr], y[tr])
+        p[te] = m.predict_proba(X.iloc[te])[:, 1]
+    key = (sub["match_id"].astype("int64") * 10**10 + sub["account_id"].astype("int64")).to_numpy()
+    pm = pd.Series(p).groupby(key).mean()
+    rng = np.random.default_rng(seed)
+    draw = pd.Series((rng.random(len(pm)) < pm.to_numpy()).astype(float), index=pm.index)
+    y_star = np.full(len(df), np.nan)
+    y_star[r] = draw.reindex(key).to_numpy()
+    res = nc_player(df.assign(_y_star=y_star), rows, learner, e_all=e_all, outcome="_y_star",
+                    drop=drop)
+    res["p_sd"] = float(pm.std())
+    return res
+
+
 def _nc_player_rule(eb: dict) -> bool:
     return (abs(eb["prior_mean"]) <= THRESHOLDS["nc_player_mu"]
             and eb["tau"] <= THRESHOLDS["nc_player_tau"])

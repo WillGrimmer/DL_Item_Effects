@@ -15,6 +15,8 @@ Stages (results under data/processed/results/hero_<id>/patch_<patch>/):
 * ``shuffle``: §4.1 on a shuffled previous-match result (true effect zero), to tell an
   estimator artifact from real confounding. Writes ``shuffle_<learner>_<price>_nc_player.csv``
   and pools it like ``falsify``.
+* ``synth``: §4.1 (and the next-match diagnostic) on a semi-synthetic outcome drawn from
+  the covariates alone: true effect zero, realistic covariate signal. Pooled like ``falsify``.
 * ``pool``: recompute the pooled rules and bootstrap from the saved falsify/shuffle files.
 * ``compare``: after ``confirm`` has run with both learners, the agreement table (PLAN.md §3.3:
   a result counts only if logistic and LightGBM agree on sign and significance at q < 0.05).
@@ -119,6 +121,16 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
         _save_nc(p, out, tag, "nc_player", decoder)
         summary.update(nc_player_shuffled=dict(mu=p["mu"], tau=p["tau"]))
 
+    elif stage == "synth":
+        e_nc = cached_propensities(df, out, learner, "h_nc", drop=analysis.NC_PLAYER_DROP)
+        p = analysis.nc_player_semisynthetic(df, allr, learner, e_all=e_nc, seed=1)
+        _save_nc(p, out, tag, "nc_player", decoder)
+        nx = analysis.nc_player_semisynthetic(df, allr, learner, e_all=e_all, seed=2,
+                                              outcome="nc_next_won", drop=())
+        _save_nc(nx, out, tag, "nc_next", decoder)
+        summary.update(nc_player_synth=dict(mu=p["mu"], tau=p["tau"], p_sd=p["p_sd"]),
+                       nc_next_synth=dict(mu=nx["mu"], tau=nx["tau"], p_sd=nx["p_sd"]))
+
     elif stage == "confirm":
         conf = ~dev
         fit = analysis.fit_rows(df, conf, learner, e_hat=e_all[conf])
@@ -206,7 +218,8 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Phase 3: one hero end to end.")
     ap.add_argument("--hero", type=int, required=True)
     ap.add_argument("--patch", required=True)
-    ap.add_argument("--stage", choices=("dev", "falsify", "shuffle", "confirm", "compare", "pool"),
+    ap.add_argument("--stage", choices=("dev", "falsify", "shuffle", "synth", "confirm", "compare",
+                                        "pool"),
                     required=True)
     ap.add_argument("--learner", choices=("logistic", "lgbm"), default="logistic")
     ap.add_argument("--prices", type=int, nargs="*", default=list(PRICES))
@@ -214,7 +227,7 @@ def main(argv: list[str] | None = None) -> None:
 
     out = results_dir(a.hero, a.patch)
     if a.stage == "pool":
-        for st in ("falsify", "shuffle"):
+        for st in ("falsify", "shuffle", "synth"):
             print(json.dumps(pool(out, st, a.learner, a.prices), indent=1, default=float))
         return
     if a.stage == "compare":
@@ -248,7 +261,7 @@ def main(argv: list[str] | None = None) -> None:
     sfile = out / f"summary_{a.stage}_{a.learner}.json"
     sfile.write_text(json.dumps(summaries, indent=1, default=float))
     print(sfile)
-    if a.stage in ("falsify", "shuffle"):
+    if a.stage in ("falsify", "shuffle", "synth"):
         print(json.dumps(pool(out, a.stage, a.learner, a.prices), default=float), flush=True)
 
 

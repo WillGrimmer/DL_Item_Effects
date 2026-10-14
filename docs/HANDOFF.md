@@ -4,6 +4,73 @@ Written 2026-10-14 for an agent starting with a fresh context. Read this first, 
 [`PLAN.md`](../PLAN.md). Everything below was checked against the repo and data on disk at the
 time of writing.
 
+## 0. Update, 2026-10-14 evening: §7 decided, rerun PAUSED partway (read this first)
+
+Will accepted §7's recommendation for both questions (PLAN §8 entry of 2026-10-14). Built and
+committed (70+ tests pass):
+
+- `frame/history.py`: `prev_won`, `wr_2_6`, `wr_2_11`, `n_hist` (cap 11), `games_24h` from
+  `_history.parquet`, strictly earlier matches only, plus `nc_next_won` (diagnostic outcome,
+  never a covariate). Joined in `pipeline.build_frame`; `prev_gap_h` is now a covariate too.
+  Checked on real data: `prev_won` equals `nc_prev_won` on 100% of rows, about 98% of rows
+  join to history, no `nc_` column among the covariates (423 to 429 covariates).
+- `analysis`: §4.1 drops `NC_PLAYER_DROP` (win_streak, prev_won); `nc_next`;
+  `cluster_scores` (per arm and match sums saved as `*_scores.parquet`); `pooled_nc`,
+  `pooled_split_half`; `bootstrap_nc` (Poisson bootstrap over matches or accounts, all
+  prices jointly: honest pooled SE and the rule's real chance-fail rate);
+  `nc_player_semisynthetic` (see below).
+- `phase3`: propensity tags `h_all`, `h_nc`, `h_noskill` (old `all`/`nostreak` files belong to
+  the old design); window-level `pooled_<stage>_<learner>.json` written after falsify, shuffle
+  and synth; `--stage pool` recomputes it from saved files; `--stage synth`.
+- Old per-frame outputs were moved to `results/hero_13/patch_*/pre_history_2026-10-14/`.
+
+**Rerun state when paused (19:30 EDT, Will asked to pause):** only 09-16 falsify at 800 and
+1600 finished. 3200 has its propensities cached and `nc_player` written, nothing else. The
+log is `data/processed/results/hero_13/rerun_2026-10-14.log` (per-frame JSON lines).
+
+| Frame | §4.1 μ (τ) | next-match μ (τ) | §4.2 | §4.3 cov | §4.4 share (z SD) |
+|---|---|---|---|---|---|
+| 09-16 · 800 | −0.40pp (0.00) | −0.48pp (0.00) | ✓ | 0.945 ✓ | 0.00 (0.66) ✓ |
+| 09-16 · 1600 | −0.27pp (0.00) | +0.01pp (0.50) | ✓ | 0.965 ✓ | 0.00 (1.00) ✓ |
+
+Early read: the history covariates did not remove the shift (−0.24pp to −0.30pp before,
+for these two frames). The next-match diagnostic is −0.48pp at 800 but +0.01pp at 1600, so
+it is mixed after two frames. The shuffle can't detect bias that comes from the nuisance
+models fitting a real covariate–outcome signal. History makes that signal strong, so
+`--stage synth` was added. It draws the outcome from a pooled covariates-only model, so the
+true effect is zero with realistic signal. If synth shows the same −0.3pp, the problem is the
+estimator, not confounding.
+
+**6400 anomaly (from §7) checked:** the outcome models do not collapse. On the shuffled
+outcome, LightGBM's out-of-fold predictions range from 0.06 to 0.97 on a coin flip, which is
+heavy overfitting. The near-exact cancellation of the precision-weighted mean recurs (1e-8,
+2e-5 and 9e-4 over seeds 1 to 3, against a nominal SE of 2e-3). The arms' vs-actual estimates
+are probably negatively correlated, so the nominal FE SE misstates the pooled mean. The new
+bootstrap measures this. Extra Spirit (old 09-29 · 800 split-half z −4.02) is not yet
+investigated; recheck it once the new split-half for that frame exists.
+
+**To resume** (one job at a time, from the repo root with `PYTHONPATH=src`; about 2 h 20 min
+in total):
+
+```bash
+python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage falsify --learner lgbm --prices 3200 6400
+python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage shuffle --learner lgbm
+python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage falsify --learner lgbm
+python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage shuffle --learner lgbm
+python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage synth --learner lgbm
+python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage synth --learner lgbm
+python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage pool --learner lgbm
+```
+
+The `--prices 3200 6400` run overwrites `summary_falsify_lgbm.json` with those two prices and
+pools only them, so finish with `--stage pool`, which pools all four from the saved CSVs. The
+800 and 1600 summaries are in the log. Then read the pooled results using §7's "How to read
+the rerun", with synth deciding whether a failure is the estimator or the data.
+
+**Compute note:** falsify now takes about 50 min per Haze window (two propensity sets plus
+the next-match fits), and LightGBM overfits these outcomes. Before Phase 5 consider early
+stopping or fewer trees; that changes the learner, so log it.
+
 ## 1. Where things stand
 
 | Phase | State |
@@ -11,13 +78,13 @@ time of writing.
 | 0, 0b (scaffold, design checks) | done |
 | 1 (data) | done: two Ranked patch windows extracted, 175,188 and 204,837 matches |
 | 2 (frame and estimator) | done: 61 tests pass |
-| 3 (Haze end to end) | **in progress.** Falsification ran (results in §6). The confirm stage, which computes the real win effects, has **not** run and is blocked on a decision (§7) |
+| 3 (Haze end to end) | **in progress.** §7 decided; rerun with history covariates paused partway (§0). Confirm has **not** run |
 | 4 to 8 | not started |
 
 - **Repo:** `C:\Users\Will\Code\Projects\DL_Item_Effects`, GitHub `WillGrimmer/DL_Item_Effects`.
 - **Branch:** `plan-revision-and-phase-1` (pushed). `main` still holds only Phase 0. No PR has
   been opened.
-- **Uncommitted changes:** none, apart from this file once it is written.
+- **Uncommitted changes:** none.
 
 ## 2. What the project is, in one paragraph
 
@@ -130,7 +197,7 @@ What this says:
 - **Phase 3's exit (§4.1 to 4.4 pass on Haze) is not met.** The confirm stage has not run,
   deliberately.
 
-## 7. Open decisions (for Will)
+## 7. Open decisions (for Will) — DECIDED 2026-10-14, see §0
 
 These are the user's calls because the §4 rules were frozen when Phase 3 started (PLAN log,
 2026-10-13), and the results have now been seen.
