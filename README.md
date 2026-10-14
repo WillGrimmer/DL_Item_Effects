@@ -24,11 +24,20 @@ the most-bought items it is a question about build order and not about the value
 the item (PLAN §1).
 
 ## Status
-Phase 0 is done: the design, the core estimators, and ported data plumbing, with 21 passing
-tests. The design was then checked against the live data
+Phases 0 to 2 are done. The design was checked against the live data
 ([`docs/design_checks_2026-10-13.md`](docs/design_checks_2026-10-13.md)), which changed the
-plan: Ranked matches only, shop visits as the unit, full-price purchases as the trials. The
-next step is Phase 1: repoint the extraction at the new data lake.
+plan: Ranked matches only, shop visits as the unit, full-price purchases as the trials. Two
+patch windows are extracted (380k Ranked matches), and the frame and estimator pass 59 tests,
+including end-to-end synthetic checks. Phase 3 (Haze end to end) is in progress.
+
+## Running it
+```bash
+python -m dl_item_effects.ingest.extract --patch 09-29-2026 --end 2026-10-12
+python -m dl_item_effects.ingest.objectives --patch 09-29-2026 --end 2026-10-12
+python -m dl_item_effects.frame.diagnostics --hero Haze --patch 09-29-2026
+python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage falsify
+```
+Set `PYTHONPATH=src` or `pip install -e .` first. Outputs go to `data/processed/` (git-ignored).
 
 ## Setup
 ```bash

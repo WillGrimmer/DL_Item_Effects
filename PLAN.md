@@ -116,8 +116,9 @@ as in Cattaneo 2010.
     supported players who bought something else. Computed from the same scores as
     `(mean(psi_k) − mean(Y)) / (1 − share_k)`. This replaces "X versus a uniformly random
     alternative", which no player does and which gives a 2% item the weight of the default.
-- **Learners:** logistic for speed, LightGBM for the reported numbers. A result counts only if
-  the two agree on sign and significance. Disagreement gets flagged.
+- **Learners:** LightGBM for the reported numbers and the falsification checks; logistic as
+  the cross-check. A result counts only if the two agree on sign and significance.
+  Disagreement gets flagged.
 
 ### 3.4 Effect over game time (`estimate/heterogeneity.py`, built)
 Regress the doubly robust pseudo-outcome on a cubic spline in game time with a clustered
@@ -218,6 +219,11 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-14**: LightGBM, not logistic, runs the falsification checks. On the largest Haze
+  frame (260k training rows, 417 covariates, 9 arms) one propensity fold takes 17 s with
+  LightGBM against 63 s for logistic, and held-out log-loss is 1.020 against 1.113. The
+  checks should test the learner the reported numbers use. Logistic stays as the agreement
+  check. Heavy jobs run one at a time: two in parallel stalled each other.
 - **2026-10-13**: Phase 3 started on Haze. The §4 thresholds are frozen from this commit; they
   are encoded in `analysis.THRESHOLDS`.
 - **2026-10-13**: Phase 2 done. Haze design tables: 42 arms in the 09-16 window (31 "choice",

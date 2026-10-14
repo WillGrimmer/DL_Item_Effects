@@ -10,6 +10,8 @@ Stages (results under data/processed/results/hero_<id>/patch_<patch>/):
 * ``confirm``: the reported tables on the other 80%, run once the design is frozen: headline
   per arm with crossover label, pairwise matrix, curves over game time, OVB bounds benchmarked
   against the skill covariates, and BH q-values.
+* ``compare``: after ``confirm`` has run with both learners, the agreement table (PLAN.md §3.3:
+  a result counts only if logistic and LightGBM agree on sign and significance at q < 0.05).
 
 Propensities use no outcome, so they are fitted once per (price, learner, covariate set) on
 all rows and cached as .npy files keyed by the frame's size.
@@ -133,16 +135,38 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
     return summary
 
 
+def compare(out: Path, prices=PRICES, alpha: float = 0.05) -> pd.DataFrame:
+    rows = []
+    for price in prices:
+        a = pd.read_csv(out / f"confirm_logistic_{price}_effects.csv")
+        b = pd.read_csv(out / f"confirm_lgbm_{price}_effects.csv")
+        m = a.merge(b, on=["arm", "item"], suffixes=("_logit", "_lgbm"))
+        m.insert(0, "price", price)
+        rows.append(m)
+    m = pd.concat(rows, ignore_index=True)
+    sig_a, sig_b = m["q_logit"] < alpha, m["q_lgbm"] < alpha
+    same_sign = np.sign(m["effect_logit"]) == np.sign(m["effect_lgbm"])
+    m["agree"] = (sig_a & sig_b & same_sign) | (~sig_a & ~sig_b)
+    m["counts"] = sig_a & sig_b & same_sign
+    m.to_csv(out / "confirm_agreement.csv", index=False)
+    return m
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Phase 3: one hero end to end.")
     ap.add_argument("--hero", type=int, required=True)
     ap.add_argument("--patch", required=True)
-    ap.add_argument("--stage", choices=("dev", "falsify", "confirm"), required=True)
+    ap.add_argument("--stage", choices=("dev", "falsify", "confirm", "compare"), required=True)
     ap.add_argument("--learner", choices=("logistic", "lgbm"), default="logistic")
     ap.add_argument("--prices", type=int, nargs="*", default=list(PRICES))
     a = ap.parse_args(argv)
 
     out = results_dir(a.hero, a.patch)
+    if a.stage == "compare":
+        m = compare(out, a.prices)
+        print(f"{int(m['agree'].sum())} of {len(m)} arms agree; {int(m['counts'].sum())} count "
+              f"(both significant, same sign)")
+        return
     decoder = ItemDecoder.load()
     t0 = time.monotonic()
     w = load_hero_window(a.patch, a.hero)
