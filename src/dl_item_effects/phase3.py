@@ -6,17 +6,23 @@ Stages (results under data/processed/results/hero_<id>/patch_<patch>/):
 
 * ``dev``: effects on the dev set only (20% of matches), for tuning and diagnostics.
 * ``falsify``: PLAN.md §4.1 to 4.4 on all matches. Only the checks' statistics are written:
-  negative-control effects, SE coverage, and split-half z-scores, never the win effects.
+  negative-control effects (with per-match score sums for the bootstrap), SE coverage, and
+  split-half z-scores, never the win effects. Also the next-match diagnostic. Ends with the
+  window-level pooled rules (``pooled_falsify_<learner>.json``).
 * ``confirm``: the reported tables on the other 80%, run once the design is frozen: headline
   per arm with crossover label, pairwise matrix, curves over game time, OVB bounds benchmarked
   against the skill covariates, and BH q-values.
 * ``shuffle``: §4.1 on a shuffled previous-match result (true effect zero), to tell an
-  estimator artifact from real confounding. Writes ``shuffle_<learner>_<price>_nc_player.csv``.
+  estimator artifact from real confounding. Writes ``shuffle_<learner>_<price>_nc_player.csv``
+  and pools it like ``falsify``.
+* ``pool``: recompute the pooled rules and bootstrap from the saved falsify/shuffle files.
 * ``compare``: after ``confirm`` has run with both learners, the agreement table (PLAN.md §3.3:
   a result counts only if logistic and LightGBM agree on sign and significance at q < 0.05).
 
 Propensities use no outcome, so they are fitted once per (price, learner, covariate set) on
-all rows and cached as .npy files keyed by the frame's size.
+all rows and cached as .npy files keyed by the frame's size. Covariate-set tags start with
+``h_`` since the player-history covariates were added (2026-10-14); older ``all``/``nostreak``
+files belong to the design before that.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ from .estimate.heterogeneity import empirical_bayes
 from .pipeline import build_frame, load_hero_window
 
 PRICES = (800, 1600, 3200, 6400)
+NC_OUTCOMES = ("nc_player", "nc_next")
 CURVE_GRID_S = np.arange(300, 2701, 150)
 
 
@@ -64,7 +71,7 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
     allr = np.ones(len(df), bool)
     tag = f"{stage}_{learner}_{price}"
     t0 = time.monotonic()
-    e_all = cached_propensities(df, out, learner, "all")
+    e_all = cached_propensities(df, out, learner, "h_all")
     summary = dict(price=price, stage=stage, learner=learner, rows=len(df), dev_rows=int(dev.sum()),
                    arms=_names(decoder, df.attrs["arms"]),
                    multi_arm_visits=df.attrs["n_multi_arm_visits"],
@@ -80,10 +87,11 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
                        fold_absent=len(fit.fold_absent))
 
     elif stage == "falsify":
-        e_ns = cached_propensities(df, out, learner, "nostreak", drop=("win_streak",))
-        p = analysis.nc_player(df, allr, learner, e_all=e_ns)
-        p["table"].assign(item=_names(decoder, p["table"]["arm"])).to_csv(
-            out / f"{tag}_nc_player.csv", index=False)
+        e_nc = cached_propensities(df, out, learner, "h_nc", drop=analysis.NC_PLAYER_DROP)
+        p = analysis.nc_player(df, allr, learner, e_all=e_nc)
+        _save_nc(p, out, tag, "nc_player", decoder)
+        nx = analysis.nc_next(df, allr, learner, e_all=e_all)
+        _save_nc(nx, out, tag, "nc_next", decoder)
         g = analysis.nc_ingame(df, allr, learner, e_all=e_all)
         for col in ("nc_prior_souls", "nc_prior_deaths"):
             g[col]["table"].assign(item=_names(decoder, g[col]["table"]["arm"])).to_csv(
@@ -96,6 +104,7 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
         summary.update(
             nc_player=dict(mu=p["mu"], tau=p["tau"], passed=p["passed"],
                            null_fail_rate=p["null_fail_rate"]),
+            nc_next=dict(mu=nx["mu"], tau=nx["tau"], passed=nx["passed"]),
             nc_ingame={k: dict(share_within=v["share_within"], mean_abs=v["mean_abs"],
                                passed=v["passed"]) for k, v in g.items() if isinstance(v, dict)},
             se_calibration=dict(arm=decoder.name(int(c["arm"])), coverage=c["coverage"],
@@ -105,10 +114,9 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
             passed=bool(p["passed"] and g["passed"] and c["passed"] and s["passed"]))
 
     elif stage == "shuffle":
-        e_ns = cached_propensities(df, out, learner, "nostreak", drop=("win_streak",))
-        p = analysis.nc_player_shuffled(df, allr, learner, e_all=e_ns, seed=1)
-        p["table"].assign(item=_names(decoder, p["table"]["arm"])).to_csv(
-            out / f"{tag}_nc_player.csv", index=False)
+        e_nc = cached_propensities(df, out, learner, "h_nc", drop=analysis.NC_PLAYER_DROP)
+        p = analysis.nc_player_shuffled(df, allr, learner, e_all=e_nc, seed=1)
+        _save_nc(p, out, tag, "nc_player", decoder)
         summary.update(nc_player_shuffled=dict(mu=p["mu"], tau=p["tau"]))
 
     elif stage == "confirm":
@@ -118,7 +126,8 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
         tab["p"] = two_sided_p(tab["effect"], tab["se"])
         eb = empirical_bayes(tab["effect"].to_numpy(), tab["se"].to_numpy())
         tab["eb_effect"], tab["eb_sd"] = eb["post_mean"], eb["post_sd"]
-        e_ns = cached_propensities(df, out, learner, "noskill", drop=tuple(analysis.SKILL_COLUMNS))
+        e_ns = cached_propensities(df, out, learner, "h_noskill",
+                                   drop=tuple(analysis.SKILL_COLUMNS))
         short = analysis.fit_rows(df, conf, learner, drop=tuple(analysis.SKILL_COLUMNS),
                                   e_hat=e_ns[conf])
         sens = []
@@ -145,6 +154,37 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
     return summary
 
 
+def _save_nc(p: dict, out: Path, tag: str, name: str, decoder) -> None:
+    p["table"].assign(item=_names(decoder, p["table"]["arm"])).to_csv(
+        out / f"{tag}_{name}.csv", index=False)
+    p["scores"].to_parquet(out / f"{tag}_{name}_scores.parquet", index=False)
+
+
+def pool(out: Path, stage: str, learner: str, prices=PRICES, reps: int = 1000) -> dict:
+    """The window-level rules (PLAN.md §8, 2026-10-14): §4.1 (and the next-match diagnostic)
+    over every arm at every price, with match- and account-clustered bootstraps, and §4.4
+    over every price's split-half z."""
+    res: dict = dict(stage=stage, learner=learner, prices=list(prices))
+    for name in NC_OUTCOMES:
+        files = [(p, out / f"{stage}_{learner}_{p}_{name}") for p in prices]
+        if not all(f.with_suffix(".csv").exists() for _, f in files):
+            continue
+        tabs = pd.concat([pd.read_csv(f.with_suffix(".csv")).assign(price=p) for p, f in files],
+                         ignore_index=True)
+        scores = pd.concat([pd.read_parquet(f"{f}_scores.parquet").assign(price=p)
+                            for p, f in files], ignore_index=True)
+        r = analysis.pooled_nc(tabs)
+        r["bootstrap"] = [analysis.bootstrap_nc(scores, tabs, cluster=c, reps=reps)
+                          for c in ("match_id", "account_id")]
+        res[name] = r
+    zf = [out / f"{stage}_{learner}_{p}_split_half_z.csv" for p in prices]
+    if all(f.exists() for f in zf):
+        res["split_half"] = analysis.pooled_split_half(
+            pd.concat([pd.read_csv(f) for f in zf], ignore_index=True))
+    (out / f"pooled_{stage}_{learner}.json").write_text(json.dumps(res, indent=1, default=float))
+    return res
+
+
 def compare(out: Path, prices=PRICES, alpha: float = 0.05) -> pd.DataFrame:
     rows = []
     for price in prices:
@@ -166,12 +206,17 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Phase 3: one hero end to end.")
     ap.add_argument("--hero", type=int, required=True)
     ap.add_argument("--patch", required=True)
-    ap.add_argument("--stage", choices=("dev", "falsify", "shuffle", "confirm", "compare"), required=True)
+    ap.add_argument("--stage", choices=("dev", "falsify", "shuffle", "confirm", "compare", "pool"),
+                    required=True)
     ap.add_argument("--learner", choices=("logistic", "lgbm"), default="logistic")
     ap.add_argument("--prices", type=int, nargs="*", default=list(PRICES))
     a = ap.parse_args(argv)
 
     out = results_dir(a.hero, a.patch)
+    if a.stage == "pool":
+        for st in ("falsify", "shuffle"):
+            print(json.dumps(pool(out, st, a.learner, a.prices), indent=1, default=float))
+        return
     if a.stage == "compare":
         m = compare(out, a.prices)
         print(f"{int(m['agree'].sum())} of {len(m)} arms agree; {int(m['counts'].sum())} count "
@@ -203,6 +248,8 @@ def main(argv: list[str] | None = None) -> None:
     sfile = out / f"summary_{a.stage}_{a.learner}.json"
     sfile.write_text(json.dumps(summaries, indent=1, default=float))
     print(sfile)
+    if a.stage in ("falsify", "shuffle"):
+        print(json.dumps(pool(out, a.stage, a.learner, a.prices), default=float), flush=True)
 
 
 if __name__ == "__main__":

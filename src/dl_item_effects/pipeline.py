@@ -1,7 +1,8 @@
 """Load one hero's patch window and build full decision frames (PLAN.md §3.2).
 
-The frame carries every pre-decision covariate: state at the start of the visit, lane, own
-inventory, both teams' heroes, enemy inventories and objectives. ``is_dev`` marks the dev
+The frame carries every pre-decision covariate: state at the start of the visit, the player's
+Ranked history before the match, lane, own inventory, both teams' heroes, enemy inventories
+and objectives. ``is_dev`` marks the dev
 set (PLAN.md §3.1): a fixed splitmix64 hash of ``match_id``, modulo 5, equal to 0. Raw match ids
 are not uniform modulo 5 (31k to 40k matches per residue in the 09-16 window) and the residue
 shifts mean rank slightly, so the hash is needed for a representative 20%.
@@ -16,8 +17,8 @@ import numpy as np
 import pandas as pd
 
 from . import config
-from .frame import (add_composition, add_enemy_inventory, add_objectives, covariate_columns,
-                    decision_frame)
+from .frame import (add_composition, add_enemy_inventory, add_objectives, add_player_history,
+                    covariate_columns, decision_frame, history_features)
 
 ENEMY_COLUMNS = ["match_id", "team", "item_id", "game_time_s", "sold_time_s"]
 
@@ -30,6 +31,7 @@ class HeroWindow:
     match_events: pd.DataFrame  # every player's purchases in this hero's matches (slim)
     objectives: pd.DataFrame
     heroes: list[int]           # every hero seen in the window, for composition columns
+    history: pd.DataFrame | None = None   # history_features for this hero's accounts
 
 
 def is_dev(match_id) -> np.ndarray:
@@ -66,7 +68,10 @@ def load_hero_window(patch: str, hero_id: int, events_dir: str | Path | None = N
         f"SELECT * FROM read_parquet('{obj_path.as_posix()}') "
         f"WHERE match_id IN (SELECT DISTINCT match_id FROM ev)").df()
         if obj_path.exists() else pd.DataFrame(columns=["match_id", "team", "kind", "t"]))
-    return HeroWindow(patch, int(hero_id), events, match_events, objectives, heroes)
+    hist_path = d / "_history.parquet"
+    history = (history_features(hist_path.as_posix(), accounts=events["account_id"], con=con)
+               if hist_path.exists() else None)
+    return HeroWindow(patch, int(hero_id), events, match_events, objectives, heroes, history)
 
 
 def component_closure(decoder) -> dict[int, tuple[int, ...]]:
@@ -86,6 +91,8 @@ def build_frame(w: HeroWindow, price: int, decoder, arms: list[int] | None = Non
     df = add_enemy_inventory(df, w.match_events, items=items)
     if len(w.objectives):
         df = add_objectives(df, w.objectives)
+    if w.history is not None:
+        df = add_player_history(df, w.history)
     df["dev"] = is_dev(df["match_id"])
     return df
 

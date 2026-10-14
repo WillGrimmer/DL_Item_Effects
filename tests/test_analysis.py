@@ -1,5 +1,6 @@
 """Falsification checks and sensitivity bounds on synthetic data with known structure."""
 import numpy as np
+import pandas as pd
 import pytest
 
 from dl_item_effects import analysis
@@ -71,3 +72,27 @@ def test_null_fail_rate_reflects_the_rules_noise_floor():
 def test_shuffled_negative_control_keeps_one_value_per_player(frame):
     r = analysis.nc_player_shuffled(frame, np.ones(len(frame), bool), seed=3)
     assert set(r) >= {"mu", "tau", "table"} and abs(r["mu"]) < 0.01
+
+
+def test_cluster_scores_reproduce_the_estimates_and_bootstrap_is_near_nominal(frame):
+    p = analysis.nc_player(frame, np.ones(len(frame), bool))
+    tab, sc = p["table"].assign(price=3200), p["scores"].assign(price=3200)
+    g = sc.groupby("arm")[["d", "o"]].sum()
+    assert np.allclose((g["d"] / g["o"]).loc[tab["arm"]].to_numpy(), tab["effect"])
+    pooled = analysis.pooled_nc(tab)
+    assert pooled["mu"] == pytest.approx(p["mu"]) and pooled["n_arms"] == len(tab)
+    for cluster in ("match_id", "account_id"):
+        b = analysis.bootstrap_nc(sc, tab, cluster=cluster, reps=300, seed=1)
+        assert b["max_abs_point_gap"] < 1e-12
+        assert 0.8 < b["se_ratio_median"] < 1.25       # independent rows: bootstrap ~ nominal
+        assert 0 <= b["chance_fail"] <= 1 and b["mu_se"] > 0
+
+
+def test_next_match_diagnostic_and_pooled_split_half(frame):
+    rng = np.random.default_rng(9)
+    df = frame.assign(nc_next_won=(rng.random(len(frame)) < 0.5).astype(float))
+    r = analysis.nc_next(df, np.ones(len(df), bool))
+    assert abs(r["mu"]) < 0.01
+    z = pd.DataFrame(dict(arm=range(20), z=[0.0] * 18 + [2.5, -3.0]))
+    s = analysis.pooled_split_half(z)
+    assert s["share_beyond"] == 0.1 and s["passed"] and s["n_arms"] == 20

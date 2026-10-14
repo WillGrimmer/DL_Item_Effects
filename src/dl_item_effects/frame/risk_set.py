@@ -266,9 +266,9 @@ def add_objectives(df: pd.DataFrame, objectives: pd.DataFrame) -> pd.DataFrame:
 
 
 def covariate_columns(df: pd.DataFrame) -> list[str]:
-    """Every pre-decision covariate in the frame: state, lane, inventory, composition,
-    enemy inventories, objectives."""
+    """Every pre-decision covariate in the frame: state, player history, lane, inventory,
+    composition, enemy inventories, objectives."""
     state = [c for c in STATE_COLUMNS if c in df.columns]
-    return state + [c for key in ("lane_cols", "own_cols", "comp_cols", "enemy_cols",
-                                  "objective_cols")
+    return state + [c for key in ("history_cols", "lane_cols", "own_cols", "comp_cols",
+                                  "enemy_cols", "objective_cols")
                     for c in df.attrs.get(key, [])]

@@ -4,13 +4,21 @@
 * Falsification (PLAN.md §4), each returning a table and a pass/fail against the thresholds
   fixed there:
   - :func:`nc_player` (§4.1): the player's previous Ranked match result, fitted without win
-    streak. Pass: |mu| <= 0.2pp and tau <= 0.3pp across arms.
+    streak or the previous result itself (``NC_PLAYER_DROP``; the history covariates start two
+    matches back). Pass: |mu| <= 0.2pp and tau <= 0.3pp across arms, applied once per hero
+    and window over every price (:func:`pooled_nc`, PLAN.md §8 2026-10-14).
+  - :func:`nc_next` (diagnostic, not a gate): the player's next Ranked match result, with the
+    full production covariates.
   - :func:`nc_ingame` (§4.2): souls gained and deaths over the snapshot interval before the
     decision, in SD units. Pass: |d| <= 0.1 SD for at least 90% of arms and mean |d| <= 0.05.
   - :func:`se_calibration` (§4.3): random halves of one arm's buyers as fake arms, 200 times.
     Pass: 92% to 98% of 95% intervals cover zero.
   - :func:`split_half` (§4.4): two random halves of the matches. Pass: at most 10% of arms
-    differ by more than 1.96 combined SEs.
+    differ by more than 1.96 combined SEs, pooled over a window's prices
+    (:func:`pooled_split_half`).
+* :func:`bootstrap_nc`: honest pooled SEs and the §4.1 rule's real chance-fail rate, from
+  per-cluster score sums resampled over matches or accounts (shared across a window's
+  prices, so arms that share rows stay correlated).
 * :func:`ovb` (§3.6): omitted-variable-bias bounds for DML (Chernozhukov, Cinelli, Newey,
   Sharma & Syrgkanis 2022), in DoubleML's parametrization: the bias is at most
   ``S * |rho| * sqrt(cf_y * cf_d / (1 - cf_d))`` with ``S^2 = sigma^2 * nu^2``. The Riesz
@@ -22,13 +30,14 @@ import numpy as np
 import pandas as pd
 
 from .estimate.aipw import (MultiArmFit, _clustered_se, effect_table, fit_multiarm,
-                            pairwise, vs_actual)
+                            pairwise, vs_actual, vs_actual_scores)
 from .estimate.heterogeneity import empirical_bayes
 from .frame import covariate_columns
 from .pipeline import is_dev
 
 SKILL_COLUMNS = ["badge_level", "rank_level", "own_minus_team", "team_rank_gap",
                  "in_calibration", "win_streak"]
+NC_PLAYER_DROP = ("win_streak", "prev_won")
 THRESHOLDS = dict(nc_player_mu=0.002, nc_player_tau=0.003, nc_ingame_arm=0.10,
                   nc_ingame_share=0.90, nc_ingame_mean=0.05, se_cov_lo=0.92, se_cov_hi=0.98,
                   split_half_share=0.10)
@@ -72,17 +81,90 @@ def _sub(e_all: np.ndarray | None, rows: np.ndarray):
 
 
 def nc_player(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
-              e_all: np.ndarray | None = None) -> dict:
+              e_all: np.ndarray | None = None, outcome: str = "nc_prev_won",
+              drop: tuple[str, ...] = NC_PLAYER_DROP) -> dict:
     """§4.1: effect of the choice on the player's previous Ranked match result.
-    ``e_all``: propensities for every frame row fitted WITHOUT win streak."""
-    r = np.asarray(rows, dtype=bool) & df["nc_prev_won"].notna().to_numpy()
-    fit = fit_rows(df, r, learner, outcome="nc_prev_won", drop=("win_streak",),
-                   e_hat=_sub(e_all, r))
+    ``e_all``: propensities for every frame row fitted without ``drop``. ``scores`` holds the
+    per-(arm, match) sums behind each estimate, for :func:`bootstrap_nc`."""
+    r = np.asarray(rows, dtype=bool) & df[outcome].notna().to_numpy()
+    fit = fit_rows(df, r, learner, outcome=outcome, drop=drop, e_hat=_sub(e_all, r))
     tab = effect_table(fit).dropna(subset=["effect", "se"])
     eb = empirical_bayes(tab["effect"].to_numpy(), tab["se"].to_numpy())
     ok = _nc_player_rule(eb)
     return dict(table=tab, mu=eb["prior_mean"], tau=eb["tau"], passed=bool(ok),
-                null_fail_rate=null_fail_rate(tab["se"].to_numpy()))
+                null_fail_rate=null_fail_rate(tab["se"].to_numpy()),
+                scores=cluster_scores(fit, df.loc[r, "account_id"].to_numpy(),
+                                      keep=set(tab["arm"])))
+
+
+def nc_next(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
+            e_all: np.ndarray | None = None) -> dict:
+    """Diagnostic: effect of the choice on the player's NEXT Ranked match result, with the
+    full production covariates (``e_all`` fitted on all of them). If §4.1 fails but this is
+    about zero, the link is to the last result itself, which production adjusts for."""
+    return nc_player(df, rows, learner, e_all=e_all, outcome="nc_next_won", drop=())
+
+
+def cluster_scores(fit: MultiArmFit, account: np.ndarray, keep=None) -> pd.DataFrame:
+    """Per (arm, match): the sums of ``psi_k - Y`` (``d``) and ``1{A != k}`` (``o``) behind the
+    headline, so that ``sum d / sum o`` over any resample of matches is its estimate."""
+    out = []
+    for k in range(fit.psi.shape[1]):
+        if keep is not None and fit.arms[k] not in keep:
+            continue
+        rows, d, other = vs_actual_scores(fit, k)
+        g = pd.DataFrame(dict(match_id=fit.groups[rows], account_id=account[rows], d=d,
+                              o=other))
+        g = g.groupby(["match_id", "account_id"], sort=False, as_index=False).sum()
+        out.append(g.assign(arm=fit.arms[k]))
+    return pd.concat(out, ignore_index=True)[["arm", "match_id", "account_id", "d", "o"]]
+
+
+def pooled_nc(tables: pd.DataFrame) -> dict:
+    """§4.1 applied once per hero and window: one mean and between-arm SD over every arm at
+    every price (``tables``: the per-price effect tables stacked)."""
+    eb = empirical_bayes(tables["effect"].to_numpy(), tables["se"].to_numpy())
+    w = 1 / tables["se"].to_numpy() ** 2
+    return dict(mu=eb["prior_mean"], tau=eb["tau"], passed=bool(_nc_player_rule(eb)),
+                n_arms=len(tables), fe_mean=float(np.sum(w * tables["effect"]) / np.sum(w)),
+                fe_se=float(np.sqrt(1 / np.sum(w))),
+                null_fail_rate=null_fail_rate(tables["se"].to_numpy()))
+
+
+def bootstrap_nc(scores: pd.DataFrame, tables: pd.DataFrame, cluster: str = "match_id",
+                 reps: int = 1000, seed: int = 0) -> dict:
+    """Poisson bootstrap over clusters (``match_id`` or ``account_id``) of a window's §4.1
+    estimates, all prices at once. ``scores`` and ``tables`` carry a ``price`` column.
+
+    Returns the bootstrap SE of the pooled mean (``mu_se``; ``fe_se`` for the fixed-effect
+    mean), the median ratio of bootstrap to nominal per-arm SEs, and ``chance_fail``: how
+    often the rule fails on draws centred at the estimates (a null with the real dependence
+    between arms and prices, scored with the nominal SEs as the rule is). Nuisance models are
+    held fixed, so this is the second-stage variance only."""
+    key = ["price", "arm"]
+    t = tables.set_index(key)
+    gi = t.index.get_indexer(pd.MultiIndex.from_frame(scores[key]))
+    s = scores[gi >= 0]
+    gi = gi[gi >= 0]
+    ci, uniq = pd.factorize(s[cluster])
+    d, o = s["d"].to_numpy(), s["o"].to_numpy()
+    G = len(t)
+    theta = np.bincount(gi, d, G) / np.bincount(gi, o, G)
+    se = t["se"].to_numpy()
+    w_fe = 1 / se ** 2
+    rng = np.random.default_rng(seed)
+    draws = np.empty((reps, G))
+    for b in range(reps):
+        w = rng.poisson(1.0, len(uniq))[ci]
+        draws[b] = np.bincount(gi, w * d, G) / np.bincount(gi, w * o, G)
+    mus = np.array([empirical_bayes(x, se)["prior_mean"] for x in draws])
+    fes = draws @ w_fe / w_fe.sum()
+    fails = [not _nc_player_rule(empirical_bayes(x, se)) for x in draws - theta]
+    return dict(cluster=cluster, reps=reps, n_clusters=len(uniq), mu_se=float(mus.std()),
+                fe_se=float(fes.std()),
+                se_ratio_median=float(np.median(draws.std(0) / se)),
+                chance_fail=float(np.mean(fails)),
+                max_abs_point_gap=float(np.max(np.abs(theta - t["effect"].to_numpy()))))
 
 
 def nc_player_shuffled(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
@@ -233,6 +315,13 @@ def ovb_benchmark(long: MultiArmFit, short: MultiArmFit, k: int,
     r2_riesz = sh["nu2"] / lo["nu2"] if lo["nu2"] > 0 else 1.0
     cf_d = float(np.clip((1 - r2_riesz) / r2_riesz, 0, 1)) if r2_riesz > 0 else 1.0
     return dict(cf_y=cf_y, cf_d=cf_d, delta=sh["effect"] - lo["effect"])
+
+
+def pooled_split_half(z: pd.DataFrame) -> dict:
+    """§4.4 applied once per hero and window: ``z`` stacks every price's split-half z."""
+    share = float((z["z"].abs() > 1.96).mean())
+    return dict(share_beyond=share, z_sd=float(z["z"].std()), n_arms=len(z),
+                passed=share <= THRESHOLDS["split_half_share"])
 
 
 def dev_rows(df: pd.DataFrame) -> np.ndarray:

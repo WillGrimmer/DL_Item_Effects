@@ -219,6 +219,21 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-14** (Will accepted the recommendation in `docs/HANDOFF.md` §7): §4.1 and §4.4 are
+  applied once per hero and window, pooled over prices, as their wording says (per frame they
+  fail by chance in 95% and 55% to 76% of windows). Decided after seeing Haze's falsification
+  statistics but before any confirm result, for all heroes. It turns Haze's §4.4 into a pass;
+  per-frame flags stay reported. Thresholds are unchanged. For the previous-match shift (a
+  shuffle of the previous result gives +0.05pp and +0.11pp against the real -0.34pp and
+  -0.28pp, so it is not an estimator artifact): add player-history covariates (previous
+  result, win rate over matches 2 to 6 and 2 to 11 back, history count, games in the previous
+  24 hours, plus the existing gap since the previous match). §4.1 keeps its outcome and runs
+  without win streak or the previous result; history starts two matches back, so the outcome
+  stays outside it. The next Ranked match's result, with the full production covariates, is a
+  diagnostic, not a gate. Pooled SEs and the rule's real chance-fail rate come from a
+  bootstrap over matches and over accounts. Calibration (widen by τ, never shift) is a
+  fallback only if the rerun fails, and Will chooses it. Hero experience is not added:
+  `_history.parquet` has no hero_id.
 - **2026-10-14**: Haze falsification (LightGBM, 8 frames = 2 windows x 4 prices, 77 min).
   §4.2 passes everywhere (adjusted differences at most 0.03 SD). §4.1 fails everywhere: the
   previous-match control is negative in 7 of 8 frames, -0.34pp (SE 0.10) pooled in 09-16 and
