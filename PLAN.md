@@ -218,6 +218,8 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-13**: Phase 3 started on Haze. The §4 thresholds are frozen from this commit; they
+  are encoded in `analysis.THRESHOLDS`.
 - **2026-10-13**: Phase 2 done. Haze design tables: 42 arms in the 09-16 window (31 "choice",
   9 "mixed", 2 "order") and 38 in the 09-29 window (24, 12, 2). Burst Fire and Swift Striker
   are "order" in both. Optimistic 95% half-widths are 0.36pp to 1.5pp. The 0.2pp simulation gap
