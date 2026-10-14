@@ -88,11 +88,12 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
                 out / f"{tag}_{col}.csv", index=False)
         dev_fit = analysis.fit_rows(df, dev, learner, e_hat=e_all[dev])
         c = analysis.se_calibration(dev_fit, reps=200, seed=price)
-        s = analysis.split_half(df, allr, learner, seed=price, e_all=e_all)
+        s = analysis.split_half(df, allr, learner, seed=price)
         s["z"].assign(item=_names(decoder, s["z"]["arm"])).to_csv(
             out / f"{tag}_split_half_z.csv", index=False)
         summary.update(
-            nc_player=dict(mu=p["mu"], tau=p["tau"], passed=p["passed"]),
+            nc_player=dict(mu=p["mu"], tau=p["tau"], passed=p["passed"],
+                           null_fail_rate=p["null_fail_rate"]),
             nc_ingame={k: dict(share_within=v["share_within"], mean_abs=v["mean_abs"],
                                passed=v["passed"]) for k, v in g.items() if isinstance(v, dict)},
             se_calibration=dict(arm=decoder.name(int(c["arm"])), coverage=c["coverage"],

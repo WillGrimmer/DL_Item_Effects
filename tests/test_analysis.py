@@ -60,3 +60,9 @@ def test_benchmark_from_dropping_the_confounder(frame, fit):
     b = analysis.ovb_benchmark(fit, short, 0, 1)
     assert 0 < b["cf_y"] <= 1 and 0 < b["cf_d"] <= 1
     assert b["delta"] > 0          # leaving out the confounder inflates arm 0's effect
+
+
+def test_null_fail_rate_reflects_the_rules_noise_floor():
+    tight = analysis.null_fail_rate(np.full(9, 0.0002))      # 0.02pp per arm
+    loose = analysis.null_fail_rate(np.full(9, 0.006))       # 0.6pp per arm, pooled ~0.2pp
+    assert tight < 0.01 and 0.15 < loose < 0.5

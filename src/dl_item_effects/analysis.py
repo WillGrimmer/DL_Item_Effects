@@ -80,9 +80,24 @@ def nc_player(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
                    e_hat=_sub(e_all, r))
     tab = effect_table(fit).dropna(subset=["effect", "se"])
     eb = empirical_bayes(tab["effect"].to_numpy(), tab["se"].to_numpy())
-    ok = (abs(eb["prior_mean"]) <= THRESHOLDS["nc_player_mu"]
-          and eb["tau"] <= THRESHOLDS["nc_player_tau"])
-    return dict(table=tab, mu=eb["prior_mean"], tau=eb["tau"], passed=bool(ok))
+    ok = _nc_player_rule(eb)
+    return dict(table=tab, mu=eb["prior_mean"], tau=eb["tau"], passed=bool(ok),
+                null_fail_rate=null_fail_rate(tab["se"].to_numpy()))
+
+
+def _nc_player_rule(eb: dict) -> bool:
+    return (abs(eb["prior_mean"]) <= THRESHOLDS["nc_player_mu"]
+            and eb["tau"] <= THRESHOLDS["nc_player_tau"])
+
+
+def null_fail_rate(se: np.ndarray, draws: int = 2000, seed: int = 0) -> float:
+    """How often the §4.1 rule fails when every true effect is exactly zero, given only the
+    arms' standard errors (treated as independent, so approximate). A property of the rule at
+    this sample size; it does not look at the estimates."""
+    rng = np.random.default_rng(seed)
+    se = np.asarray(se, dtype=float)
+    fails = [not _nc_player_rule(empirical_bayes(rng.normal(0, se), se)) for _ in range(draws)]
+    return float(np.mean(fails))
 
 
 def nc_ingame(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
@@ -129,17 +144,18 @@ def se_calibration(fit: MultiArmFit, k: int | None = None, reps: int = 200,
 
 
 def split_half(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
-               seed: int = 0, e_all: np.ndarray | None = None) -> dict:
-    """§4.4: estimate on two random halves of the matches and compare per arm. Only the
-    standardized differences are returned, never the effects themselves."""
+               seed: int = 0) -> dict:
+    """§4.4: estimate on two random halves of the matches and compare per arm. Each half fits
+    its own propensities, so the halves share nothing (reusing propensities fitted on both
+    halves made them agree more than their SEs allow). Only the standardized differences are
+    returned, never the effects themselves."""
     rows = np.asarray(rows, dtype=bool)
     matches = df.loc[rows, "match_id"].unique()
     rng = np.random.default_rng(seed)
     in_a = set(matches[rng.random(len(matches)) < 0.5])
     half_a = rows & df["match_id"].isin(in_a).to_numpy()
-    half_b = rows & ~half_a
-    ta = effect_table(fit_rows(df, half_a, learner, e_hat=_sub(e_all, half_a))).set_index("arm")
-    tb = effect_table(fit_rows(df, half_b, learner, e_hat=_sub(e_all, half_b))).set_index("arm")
+    ta = effect_table(fit_rows(df, half_a, learner)).set_index("arm")
+    tb = effect_table(fit_rows(df, rows & ~half_a, learner)).set_index("arm")
     z = ((ta["effect"] - tb["effect"]) / np.sqrt(ta["se"] ** 2 + tb["se"] ** 2)).dropna()
     share = float((z.abs() > 1.96).mean())
     return dict(z=z.rename("z").reset_index(), share_beyond=share, z_sd=float(z.std()),
