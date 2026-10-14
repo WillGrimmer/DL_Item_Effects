@@ -138,3 +138,26 @@ def test_composition_multi_hot():
     out = add_composition(df, [1, 2, 3, 4])
     assert list(out.ally_h1) == [1, 0] and list(out.enemy_h1) == [0, 1]
     assert list(out.enemy_h4) == [1, 0] and len(out.attrs["comp_cols"]) == 8
+
+
+def test_objectives_counted_per_side_before_the_decision():
+    from dl_item_effects.frame import add_objectives
+    dec = pd.DataFrame({"match_id": [1, 1], "team": ["Team0", "Team1"],
+                        "game_time_s": [700, 700]})
+    obj = pd.DataFrame({"match_id": [1, 1, 1, 1], "team": ["Team0", "Team1", "Team1", "Team0"],
+                        "kind": ["t1", "t1", "mid", "t2"], "t": [600, 650, 690, 900]})
+    out = add_objectives(dec, obj)
+    r0, r1 = out.iloc[0], out.iloc[1]
+    assert (r0.own_lost_t1, r0.enemy_lost_t1, r0.enemy_mid, r0.own_mid) == (1, 1, 1, 0)
+    assert (r1.own_mid, r1.own_lost_t2, r0.own_lost_t2) == (1, 0, 0)   # t2 loss is later
+    assert "own_lost_base" in out.attrs["objective_cols"]
+
+
+def test_arm_table_crossover_and_precision():
+    from dl_item_effects.frame.diagnostics import arm_table
+    df = decision_frame(_visit_events(), 3200, arms=[X, Y], components={})
+    t = arm_table(df).set_index("item_id")
+    # Y's comparison rows: player 1's X visit (buys Y 400 s later) and player 3's X visit
+    assert t.loc[Y, "n_comparison"] == 2 and t.loc[Y, "cross_by_end"] == 0.5
+    assert t.loc[Y, "cross_within"] == 0.5 and t.loc[Y, "crossover"] == "order"
+    assert t.loc[X, "half_width_pp"] > 0

@@ -152,6 +152,10 @@ df = con.execute(q).df()                  # then keep item_id in the shop-item i
 ```
 
 ## Gotchas
+- **File URLs go stale within about two hours.** Recent partitions are rebuilt roughly hourly
+  under a new key and the old file then returns 404. Never cache a file URL; re-read the
+  manifest. `extract_window` retries with a fresh manifest and records the file actually
+  used per partition in `_sources.json`.
 - Column names contain dots and must be double-quoted: `"items.item_id"`.
 - `list_zip(...)` yields unnamed structs. Access fields by index: `u[1]`, `u[2]`.
 - The rank and badge columns are `UInt32`. Cast before subtracting or DuckDB raises an overflow.

@@ -230,9 +230,43 @@ def add_enemy_inventory(df: pd.DataFrame, events: pd.DataFrame,
     return out
 
 
+def add_objectives(df: pd.DataFrame, objectives: pd.DataFrame) -> pd.DataFrame:
+    """Objectives lost and mid bosses claimed before the decision, for each side:
+    ``own_lost_<kind>`` / ``enemy_lost_<kind>`` for t1, t2 and base, and ``own_mid`` /
+    ``enemy_mid``. ``objectives`` comes from ``ingest.objectives.build_objectives``."""
+    import duckdb
+
+    con = duckdb.connect()
+    con.register("d", pd.DataFrame({"match_id": df["match_id"].to_numpy(),
+                                    "team": df["team"].astype(str).to_numpy(),
+                                    "t": df["game_time_s"].to_numpy(),
+                                    "_row": np.arange(len(df))}))
+    con.register("o", objectives[["match_id", "team", "kind", "t"]])
+    cnt = con.execute("""
+        SELECT d._row, (o.team = d.team) AS own, o.kind, count(*) AS n
+        FROM d JOIN o ON o.match_id = d.match_id AND o.t < d.t
+        GROUP BY 1, 2, 3""").df()
+    cols = [f"{side}_lost_{k}" for side in ("own", "enemy") for k in ("t1", "t2", "base")]
+    cols += ["own_mid", "enemy_mid"]
+    out = df.copy()
+    for c in cols:
+        out[c] = np.uint8(0)
+    if len(cnt):
+        side = np.where(cnt["own"], "own", "enemy")
+        name = np.where(cnt["kind"] == "mid", side + "_mid", side + "_lost_" + cnt["kind"])
+        for c in set(name):
+            sel = name == c
+            vals = np.zeros(len(df), dtype=np.uint8)
+            vals[cnt.loc[sel, "_row"].to_numpy()] = cnt.loc[sel, "n"].to_numpy()
+            out[c] = vals
+    out.attrs = {**df.attrs, "objective_cols": cols}
+    return out
+
+
 def covariate_columns(df: pd.DataFrame) -> list[str]:
     """Every pre-decision covariate in the frame: state, lane, inventory, composition,
-    enemy inventories."""
+    enemy inventories, objectives."""
     state = [c for c in STATE_COLUMNS if c in df.columns]
-    return state + [c for key in ("lane_cols", "own_cols", "comp_cols", "enemy_cols")
+    return state + [c for key in ("lane_cols", "own_cols", "comp_cols", "enemy_cols",
+                                  "objective_cols")
                     for c in df.attrs.get(key, [])]

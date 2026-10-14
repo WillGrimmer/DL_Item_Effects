@@ -212,3 +212,22 @@ def test_composition(events):
 def test_negative_controls_are_never_covariates(events):
     assert not [c for c in STATE_COLUMNS if c.startswith("nc_") or c == "duration_s"]
     assert set(STATE_COLUMNS) <= set(events.columns)
+
+
+def test_objectives_extraction(tmp_path):
+    from dl_item_effects.ingest.objectives import build_objectives
+    con = extract.connect()
+    rows = []
+    for slot in range(2):
+        rows.append({"match_id": 5, "match_mode": "Ranked", "game_mode": "Normal",
+                     "start_time": T("2026-10-01 12:00", tz="UTC"), "player_slot": slot,
+                     "objectives.destroyed_time_s": [600, 0, 1300],
+                     "objectives.team_objective": ["Tier1Lane1", "Tier2Lane3", "Core"],
+                     "objectives.team": ["Team1", "Team0", "Team1"],
+                     "mid_boss.destroyed_time_s": [1200], "mid_boss.team_claimed": ["Team0"]})
+    con.register("df", pd.DataFrame(rows))
+    shard = tmp_path / "obj.parquet"
+    con.execute(f"COPY df TO '{shard.as_posix()}' (FORMAT PARQUET)")
+    out = pd.read_parquet(build_objectives([shard.as_posix()], tmp_path / "o.parquet", con=con))
+    got = sorted(zip(out.team, out.kind, out.t))
+    assert got == [("Team0", "mid", 1200), ("Team1", "base", 1300), ("Team1", "t1", 600)]

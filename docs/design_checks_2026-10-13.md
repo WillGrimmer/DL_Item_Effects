@@ -80,8 +80,13 @@ honest SEs. For the 55% arm the SE is 0.40 against 0.15 (0.33 once rescaled to p
 bought something else); for the 5% arm 0.84 against 0.80. The choice between them is about
 meaning, not precision.
 
-**Open:** across these runs the estimate sits about 0.2pp under truth while coverage stays at
-95 to 97%. Not yet explained. It may be the simulation's definition of truth.
+**Resolved later the same day:** across these runs the estimate sat about 0.2pp under truth.
+That was Monte Carlo noise: the settings shared seeds, so one unlucky draw was counted
+several times. On 700 fresh replications (N=50k, truth 3.000pp) the estimator gives 2.978pp
+(Monte Carlo SE 0.023). Replacing every fitted nuisance with the true propensities and
+outcome probabilities changes it by +0.001pp (SE 0.001), and turning off trimming or the L2
+penalty changes nothing. The truth was right and there is no bug. Judge future simulations by
+the paired difference against oracle nuisances, or by 1,000+ fresh replications.
 
 ## 3. Power in Ranked
 

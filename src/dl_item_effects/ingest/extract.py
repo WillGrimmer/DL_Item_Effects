@@ -46,7 +46,8 @@ SHOP_COSTS = (800, 1600, 3200, 6400)
 
 def connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
-    con.execute("INSTALL httpfs; LOAD httpfs; SET TimeZone = 'UTC';")
+    con.execute("INSTALL httpfs; LOAD httpfs; SET TimeZone = 'UTC'; "
+                "SET enable_progress_bar = false;")
     return con
 
 
