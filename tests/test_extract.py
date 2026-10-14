@@ -17,6 +17,7 @@ from dl_item_effects.ingest import extract
 FIX = "tests/fixtures/assets_items_sample.json"
 GOOSE, MONSTER, QUICK, CULTIST, LIFESTEAL = (2462046703, 1009965641, 84321454, 709540378,
                                              876563814)
+EXTRA, IMPROVED, BOUNDLESS, SURGE = 968099481, 7409189, 2519598785, 1292979587
 ABILITY = 1999680326
 PATCHES = [("09-16-2026", date(2026, 9, 16)), ("09-29-2026", date(2026, 9, 29))]
 T = pd.Timestamp
@@ -65,8 +66,15 @@ def _rows():
             (600, MONSTER, 600, 1),      # same-click component row: not a decision
             (600, CULTIST, 0, 0),        # bought outright, full price
         ]),
-        _player(1, 14, 3, "Team0", 10, True, 95),
-        _player(1, 15, 4, "Team0", 11, True, 95),
+        _player(1, 14, 3, "Team0", 10, True, 95, buys=[
+            (200, EXTRA, 900, 1),        # consumed two levels down the chain
+            (900, BOUNDLESS, 0, 0),      # Boundless <- Improved <- Extra: pays 6400 - 800
+        ]),
+        _player(1, 15, 4, "Team0", 11, True, 95, buys=[
+            (300, EXTRA, 866, 1),        # one copy, two same-second upgrades could claim it
+            (866, IMPROVED, 0, 0),       # direct and cheaper: gets the credit
+            (866, SURGE, 0, 0),          # full price
+        ]),
         _player(1, 16, 5, "Team0", 12, True, 96),
         _player(1, 21, 6, "Team1", 13, False, 101, buys=[
             (120, GOOSE, 0, 0), (390, QUICK, 0, 0), (390, LIFESTEAL, 0, 0)]),  # same-second pair
@@ -111,8 +119,8 @@ def _row(ev, acct, item):
 def test_filters_and_row_count(events):
     assert set(events.match_id) == {1}          # 11-player and Street Brawl matches dropped
     assert ABILITY not in set(events.item_id)
-    # 11: Goose, Monster, Quicksilver, Cultist; 12: Monster; 13: Cultist; 21: three items
-    assert len(events) == 9
+    # 11: four items; 12: one; 13: one; 14: two; 15: three; 21: three
+    assert len(events) == 14
 
 
 def test_same_click_component_row_is_dropped(events):
@@ -128,6 +136,13 @@ def test_price_paid_after_component_upgrade(events):
     m = _row(events, 11, MONSTER)
     assert m.consumed_by_upgrade and m.sold_time_s == 700
     assert not _row(events, 11, QUICK).consumed_by_upgrade
+
+
+def test_component_credit_follows_chains_once(events):
+    b = _row(events, 14, BOUNDLESS)
+    assert (b.price_paid, b.full_price) == (5600, False)
+    assert (_row(events, 15, IMPROVED).price_paid, _row(events, 15, SURGE).price_paid) == (800, 3200)
+    assert _row(events, 15, SURGE).full_price
 
 
 def test_start_of_game_state_before_first_snapshot(events):

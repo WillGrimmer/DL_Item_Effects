@@ -78,6 +78,54 @@
     "shopable": true
   },
   {
+    "id": 968099481,
+    "name": "Extra Spirit",
+    "class_name": "upgrade_improved_spirit",
+    "type": "upgrade",
+    "item_slot_type": "spirit",
+    "item_tier": 1,
+    "cost": 800,
+    "is_active_item": false,
+    "shopable": true,
+    "component_items": null
+  },
+  {
+    "id": 7409189,
+    "name": "Improved Spirit",
+    "class_name": "upgrade_soaring_spirit",
+    "type": "upgrade",
+    "item_slot_type": "spirit",
+    "item_tier": 2,
+    "cost": 1600,
+    "is_active_item": false,
+    "shopable": true,
+    "component_items": ["upgrade_improved_spirit"]
+  },
+  {
+    "id": 2519598785,
+    "name": "Boundless Spirit",
+    "class_name": "upgrade_boundless_spirit",
+    "type": "upgrade",
+    "item_slot_type": "spirit",
+    "item_tier": 4,
+    "cost": 6400,
+    "is_active_item": false,
+    "shopable": true,
+    "component_items": ["upgrade_soaring_spirit"]
+  },
+  {
+    "id": 1292979587,
+    "name": "Surge of Power",
+    "class_name": "upgrade_magic_storm",
+    "type": "upgrade",
+    "item_slot_type": "spirit",
+    "item_tier": 3,
+    "cost": 3200,
+    "is_active_item": false,
+    "shopable": true,
+    "component_items": ["upgrade_improved_spirit"]
+  },
+  {
     "id": 876563814,
     "name": "Spirit Lifesteal",
     "class_name": "upgrade_health_stealing_magic",

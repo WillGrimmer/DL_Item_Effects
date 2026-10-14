@@ -19,6 +19,7 @@ GOLDEN_GOOSE = 2462046703    # upgrade, spirit, tier 1
 MONSTER_ROUNDS = 1009965641  # upgrade, weapon, tier 1
 QUICKSILVER = 84321454       # upgrade, spirit, tier 2
 CULTIST = 709540378          # upgrade, weapon, tier 3
+EXTRA_SPIRIT, IMPROVED_SPIRIT, BOUNDLESS = 968099481, 7409189, 2519598785  # a chain
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +28,7 @@ def dec() -> ItemDecoder:
 
 
 def test_loads_all_records(dec):
-    assert len(dec) == 8
+    assert len(dec) == 12
 
 
 def test_classifies_ability_vs_shop(dec):
@@ -48,7 +49,14 @@ def test_shop_item_fields(dec):
 def test_components_resolve_to_ids(dec):
     assert dec.get(CULTIST).components == (MONSTER_ROUNDS,)
     assert dec.get(MONSTER_ROUNDS).components == ()
-    assert dec.component_pairs() == [(CULTIST, MONSTER_ROUNDS)]
+    assert (CULTIST, MONSTER_ROUNDS) in dec.component_pairs()
+
+
+def test_component_closure_follows_chains(dec):
+    closure = {(a, c): d for a, c, d in dec.component_closure()}
+    assert closure[(BOUNDLESS, IMPROVED_SPIRIT)] == 1
+    assert closure[(BOUNDLESS, EXTRA_SPIRIT)] == 2
+    assert (IMPROVED_SPIRIT, BOUNDLESS) not in closure
 
 
 def test_unknown_id_is_safe(dec):

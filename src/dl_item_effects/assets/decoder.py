@@ -148,6 +148,25 @@ class ItemDecoder:
         """(item_id, component_id) for every shop item that upgrades from another."""
         return [(i.id, c) for i in self.shop_items() for c in i.components]
 
+    def component_closure(self) -> list[tuple[int, int, int]]:
+        """(item_id, component_id, depth) through whole upgrade chains. Depth 1 is a direct
+        component. Buying Boundless Spirit while holding only Extra Spirit (two levels down)
+        consumes Extra Spirit, so price-paid logic needs every depth."""
+        out = []
+        for i in self.shop_items():
+            frontier, seen, depth = list(i.components), set(), 1
+            while frontier:
+                nxt = []
+                for c in frontier:
+                    if c in seen:
+                        continue
+                    seen.add(c)
+                    out.append((i.id, c, depth))
+                    info = self.get(c)
+                    nxt.extend(info.components if info else ())
+                frontier, depth = nxt, depth + 1
+        return out
+
     # -- the useful bit: decode a player's items[] list ---------------------
     def decode_purchases(self, items: list[dict[str, Any]],
                          shopable_only: bool = True) -> list[Purchase]:

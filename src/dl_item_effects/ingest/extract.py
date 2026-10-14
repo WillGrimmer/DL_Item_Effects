@@ -61,10 +61,11 @@ def _register_items(con: duckdb.DuckDBPyConnection, decoder: ItemDecoder) -> Non
                 "slot VARCHAR, tier INTEGER, cost INTEGER)")
     con.executemany("INSERT INTO item_meta VALUES (?,?,?,?,?)",
                     [(i.id, i.name, i.slot, i.tier, i.cost) for i in shop])
-    con.execute("CREATE OR REPLACE TEMP TABLE comp_map(item_id UBIGINT, component_id UBIGINT)")
-    pairs = [(a, c) for a, c in decoder.component_pairs() if a in ids and c in ids]
-    if pairs:
-        con.executemany("INSERT INTO comp_map VALUES (?,?)", pairs)
+    con.execute("CREATE OR REPLACE TEMP TABLE comp_map("
+                "item_id UBIGINT, component_id UBIGINT, depth INTEGER)")
+    rows = [r for r in decoder.component_closure() if r[0] in ids and r[1] in ids]
+    if rows:
+        con.executemany("INSERT INTO comp_map VALUES (?,?,?)", rows)
 
 
 def _register_patches(con: duckdb.DuckDBPyConnection,
@@ -192,16 +193,21 @@ def build_purchase_events(
         FROM purch p JOIN item_meta m USING (item_id)
         WHERE NOT (p.flags = 1 AND p.sold_time_s = p.game_time_s)
     ),
-    -- components held before this purchase and consumed by it
-    disc AS (
-        SELECT s.match_id, s.account_id, s.item_id, sum(c.cost) AS discount
+    -- components held before this purchase and consumed by it, at any depth of the upgrade
+    -- chain. A consumed component is credited to one purchase only: when two upgrades bought
+    -- in the same second could have used it, the direct (then cheaper) one gets it.
+    cand AS (
+        SELECT s.match_id, s.account_id, s.item_id, c.cost AS comp_cost,
+               row_number() OVER (PARTITION BY c.match_id, c.account_id, c.item_id
+                                  ORDER BY cm.depth, s.cost, s.item_id) AS pick
         FROM shop s
         JOIN comp_map cm ON cm.item_id = s.item_id
         JOIN shop c ON c.match_id = s.match_id AND c.account_id = s.account_id
                    AND c.item_id = cm.component_id AND c.flags = 1
                    AND c.sold_time_s = s.game_time_s AND c.game_time_s < s.game_time_s
-        GROUP BY 1, 2, 3
     ),
+    disc AS (SELECT match_id, account_id, item_id, sum(comp_cost) AS discount
+             FROM cand WHERE pick = 1 GROUP BY 1, 2, 3),
 
     -- state at the last snapshot at or before the purchase (ASOF: ts <= game_time_s)
     e_nw AS (
