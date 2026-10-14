@@ -9,9 +9,11 @@ into structured info, and — crucially — separates the two things that array 
                             repeat several times per match and are NOT purchases.
 * ``type == "weapon"``   -> hero base weapon entry.
 
-Verified against the live ``/v1/assets/items`` payload (726 assets: 86 weapon, 389 ability,
-251 upgrade) on 2026-07-22. Deadlock shop items do **not** combine from components, so
-inventory reconstruction is simply "the shop purchases before time t" (see decode_purchases).
+Verified against the live ``/v1/assets/items`` payload (764 assets, 250 upgrade) on
+2026-10-13. Some shop items **do** upgrade from components (65 list ``component_items``).
+Buying the upgrade while holding the component consumes it: in match data the component's
+``sold_time_s`` becomes the upgrade's purchase time and its ``flags`` becomes 1, and the
+player pays list price minus the component's cost. See docs/data_dumps.md.
 """
 from __future__ import annotations
 
@@ -39,6 +41,7 @@ class ItemInfo:
     is_active: bool | None
     shopable: bool | None
     class_name: str | None = None
+    components: tuple[int, ...] = ()   # ids of the items this one upgrades from
 
     @property
     def is_shop_item(self) -> bool:
@@ -68,11 +71,11 @@ class ItemDecoder:
     :meth:`from_records` (e.g. a test fixture)."""
 
     def __init__(self, records: Iterable[dict[str, Any]]):
+        records = [r for r in records if r.get("id") is not None]
+        id_by_class = {r["class_name"]: int(r["id"]) for r in records if r.get("class_name")}
         self._by_id: dict[int, ItemInfo] = {}
         for r in records:
             iid = r.get("id")
-            if iid is None:
-                continue
             self._by_id[int(iid)] = ItemInfo(
                 id=int(iid),
                 name=r.get("name") or r.get("class_name") or f"item_{iid}",
@@ -83,6 +86,8 @@ class ItemDecoder:
                 is_active=r.get("is_active_item"),
                 shopable=r.get("shopable"),
                 class_name=r.get("class_name"),
+                components=tuple(id_by_class[c] for c in (r.get("component_items") or [])
+                                 if c in id_by_class),
             )
 
     # -- construction -------------------------------------------------------
@@ -138,6 +143,10 @@ class ItemDecoder:
 
     def shop_items(self) -> list[ItemInfo]:
         return [i for i in self._by_id.values() if i.is_shop_item]
+
+    def component_pairs(self) -> list[tuple[int, int]]:
+        """(item_id, component_id) for every shop item that upgrades from another."""
+        return [(i.id, c) for i in self.shop_items() for c in i.components]
 
     # -- the useful bit: decode a player's items[] list ---------------------
     def decode_purchases(self, items: list[dict[str, Any]],

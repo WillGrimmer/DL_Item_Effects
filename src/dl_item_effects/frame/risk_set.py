@@ -21,10 +21,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Pre-decision state from ingest/extract.py. The nc_* columns there are negative-control
+# outcomes and must never appear here. assigned_lane is categorical and gets encoded in
+# Phase 2; rank_level and own_minus_team are NULL for players still in calibration.
 STATE_COLUMNS = [
-    "avg_badge", "enemy_avg_badge", "net_worth_at_buy", "my_team_nw", "enemy_team_nw",
+    "badge_level", "rank_level", "own_minus_team", "team_rank_gap", "in_calibration",
+    "win_streak", "has_build", "net_worth_at_buy", "my_team_nw", "enemy_team_nw",
     "team_nw_diff_at_buy", "n_prior_items", "level", "kills", "deaths", "assists",
-    "game_time_s",
+    "snapshot_age_s", "game_time_s",
 ]
 
 

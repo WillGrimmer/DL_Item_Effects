@@ -189,10 +189,10 @@ principle.** An effect near zero is an allowed answer.
 | 8 | Ownership estimand (optional) | "own X by minute T" by clone-censor-weight with a grace period and time-varying covariates | its own falsification set, written before any results |
 
 ## 6. Code status
-- `assets/decoder.py`, `api/client.py`: ported unchanged. The decoder docstring is wrong about
-  components.
-- `ingest/extract.py`: ported and extended, tested on a hand-built fixture. It targets the old
-  bucket. The SQL itself runs on the new layout (smoke-tested on 3,000 matches).
+- `assets/decoder.py`, `api/client.py`: ported; the decoder now resolves components and the
+  client fetches patches.
+- `ingest/lake.py`, `ingest/patches.py`, `ingest/extract.py`: Phase 1 extraction on the new
+  data lake, tested on a hand-built 12-player fixture and smoke-tested on 2,000 live matches.
 - `frame/risk_set.py`, `estimate/aipw.py`: built and tested on synthetic data. The defects to
   fix are listed in design_checks §6.
 - `estimate/heterogeneity.py`, `estimate/fdr.py`: built.
@@ -211,6 +211,10 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-13**: Phase 1 code done: manifest-driven extraction (`ingest/lake.py`,
+  `ingest/patches.py`, `ingest/extract.py`), price paid, start-of-game state of 600 souls and
+  level 1 (measured), previous-match link, prior-interval negative controls. 12-player Ranked
+  matches per window are within 0.4% of the volume table (175,188 and 204,573).
 - **2026-10-13**: Thresholds in §4 written down with numbers. They are proposals until Phase 3
   starts and frozen from then.
 - **2026-10-13**: Added the previous-match negative control and the dev/confirm split. Relabelled

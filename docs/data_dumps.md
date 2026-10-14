@@ -106,6 +106,18 @@ About 15k to 16k matches a day (range 14k to 18k). The two most recent patch win
 
 Infernus, Lash and Bebop sit near 90k to 97k per window.
 
+## Extracting a patch window
+`src/dl_item_effects/ingest/` does this end to end: `lake.py` reads the manifest and finds the
+partitions covering a date range, `patches.py` turns `/v1/patches` into windows, and
+`extract.py` writes one parquet per partition plus `_history.parquet` and `_sources.json`:
+
+```bash
+python -m dl_item_effects.ingest.extract --patch 09-29-2026 --end 2026-10-12
+```
+
+The 09-16-2026 window (09-17 to 09-28) is in partitions 106 to 108. The 09-29-2026 window
+(09-30 to 10-12) is in partitions 108 to 115. Output is about 0.5 GB per 100k matches.
+
 ## Working query
 Shop-purchase rows for one partition, Ranked and Normal only. Runs in about 30 s on the newest
 partition (2.3M rows before the shop-item filter).

@@ -64,3 +64,8 @@ class DeadlockAPI:
 
     def assets_ranks(self) -> list[dict]:
         return self.get("/v1/assets/ranks")
+
+    def patches(self) -> list[dict]:
+        """Changelog threads: ``title`` is the patch date (e.g. "09-29-2026" or
+        "09-16-2026 Update"); ``pub_date`` moves when hotfixes are appended."""
+        return self.get("/v1/patches")

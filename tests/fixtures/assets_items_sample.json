@@ -63,7 +63,8 @@
     "item_tier": 3,
     "cost": 3200,
     "is_active_item": true,
-    "shopable": true
+    "shopable": true,
+    "component_items": ["upgrade_non_player_bonus"]
   },
   {
     "id": 2480592370,

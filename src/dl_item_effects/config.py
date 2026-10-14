@@ -18,6 +18,17 @@ API_KEY = os.getenv("DEADLOCK_API_KEY")  # optional; raises per-IP limit 200->40
 # Rate limits (req/min): 200 per IP, 400 with key, 2000 global. Stay comfortably under.
 REQ_PER_MIN = 380 if API_KEY else 190
 
+# --- Data lake (docs/data_dumps.md) ----------------------------------------
+LAKE_BASE = os.getenv("DEADLOCK_LAKE_BASE", "https://data.deadlock-api.com")
+MANIFEST_URL = f"{LAKE_BASE}/v1/manifest.json"
+
+# Souls every player holds at t=0: net worth minus all summed gold sources at the first
+# snapshot is 600 for the large majority of Ranked players (checked 2026-10-13), and
+# stats.level is 1 at that net worth. Used as the start-of-game state before the first
+# snapshot (180 s), instead of borrowing a snapshot from after the purchase.
+START_SOULS = 600
+START_LEVEL = 1
+
 # --- Paths -----------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "data"

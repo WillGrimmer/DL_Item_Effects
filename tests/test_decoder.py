@@ -45,6 +45,12 @@ def test_shop_item_fields(dec):
     assert gg.cost == 800
 
 
+def test_components_resolve_to_ids(dec):
+    assert dec.get(CULTIST).components == (MONSTER_ROUNDS,)
+    assert dec.get(MONSTER_ROUNDS).components == ()
+    assert dec.component_pairs() == [(CULTIST, MONSTER_ROUNDS)]
+
+
 def test_unknown_id_is_safe(dec):
     assert dec.get(123) is None
     assert dec.name(123).startswith("unknown_")
