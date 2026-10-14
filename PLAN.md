@@ -4,7 +4,7 @@ Owner: Will (gh: WillGrimmer) · Started 2026-10-13 · Successor to `DL_Decision
 
 Keep this file short. Record decisions in the log at the bottom, one or two lines each. The
 v1 repo's PLAN.md turned into a 760-line diary, and that made it hard to see what the design
-actually was.
+actually was. Evidence goes in `docs/`, not here.
 
 ## 1. The question
 
@@ -16,6 +16,16 @@ Raw win rate and WPA can't answer this. Players pick items because of the game s
 item's win rate mixes "the item is good" with "players who are ahead buy it". WPA compares
 win probability before and after a moment, so it measures how the game moved, not whether a
 different choice would have done better.
+
+**What the answer is, precisely.** "X now instead of Y now, with everything the player buys
+afterwards left as it happened." That is the right number for "what should I buy next". It is
+**not** "what is owning X worth": for the most-bought items, most players who pick Y buy X
+later in the same match, and the effect is then about order (§3.2, and
+[`docs/design_checks_2026-10-13.md`](docs/design_checks_2026-10-13.md) §1-2). Every number is
+published with its crossover rate so the two readings are never confused.
+
+Not covered: buying versus saving, selling, component upgrades (§3.2), and the value of owning
+an item (Phase 8, only if the rest holds up).
 
 ## 2. Why v1 is being replaced
 
@@ -34,140 +44,205 @@ The full review is [`docs/v1_review_2026-10-13.md`](docs/v1_review_2026-10-13.md
    propensities were clipped instead of trimmed, page-level significance had no FDR, and the
    data was one week with no patch ID.
 
-## 3. The statistical design (chosen)
+v2 removes the "already owned X" half of flaw 1 by construction. The "bought it later" half is
+still there. It is now measured and reported instead of hidden.
 
-### 3.1 Sequential target-trial emulation (`frame/risk_set.py`, built)
-Every shop purchase is a small trial (Hernán & Robins' target-trial framework, applied
-sequentially as in Danaei et al. 2013).
+## 3. The statistical design
 
-- **Who is in the trial:** a decision by hero H where the player spends exactly cost C. Buying
-  something at C proves they could afford anything at C, so affordability holds by
-  construction. This is the principled version of v1's cost matching.
-- **Arms:** the items at cost C that hero H buys often enough to estimate (default ≥2% share
-  and ≥500 buys). They are fixed per (hero, cost) **before** anyone looks at outcomes.
-- **Eligibility:** an arm is only available if the player doesn't currently own it, meaning
-  they never bought it, or they sold it. This removes v1 flaw #1 by construction.
+### 3.1 Data and population
+Source and column semantics: [`docs/data_dumps.md`](docs/data_dumps.md).
+
+- **Ranked, `game_mode = 'Normal'`, exactly 12 player rows.** Unranked has had no skill data
+  since 2026-07-30 and cannot be adjusted.
+- **No filter on anything that happens after a decision.** Matches with an abandon stay in.
+- **Patch windows.** Every table is for one patch. In hand now: 09-16-2026 (09-17 to 09-28,
+  176k matches) and 09-29-2026 (09-30 onward, 205k matches by 10-12).
+- **Dev and confirm split.** Matches with `match_id % 5 == 0` are the dev set. Design tuning
+  looks only at the dev set and at falsification outputs. Win-outcome tables on the other 80%
+  are computed once, after the design is frozen, and the commit is recorded in the log.
+
+### 3.2 Decision frame (`frame/risk_set.py`; built, changes pending in Phase 2)
+Every shop visit is a small trial (Hernán & Robins' target-trial framework, applied
+sequentially as in Hernán et al. 2008 and Danaei et al. 2013).
+
+- **Unit: a shop visit at one price.** Purchases 30 s or less apart are one visit. State and
+  inventory are taken at the start of the visit. A visit that buys exactly one arm at that
+  price is a row. Visits that buy two or more arms at the same price are counted and left out.
+- **Price paid, not list price.** A purchase that consumes a held component pays less than
+  list. A trial is a full-price purchase. Component upgrades (30.5% of purchases) are not
+  trials, because nothing else costs the same for that player; the component still counts as
+  inventory.
+- **Arms:** the full-price items at that price that hero H buys often enough to estimate:
+  at least 2% share and at least 2,500 buys in the window (a 2pp half-width at best). Fixed
+  per (hero, price, patch) **before** anyone looks at outcomes.
+- **Eligibility:** an arm is available on a row only if the player does not own it and holds
+  none of its components. Owned means bought before the visit and not sold or consumed before
+  it (`sold = 0 OR sold >= t`).
 - **Outcome:** match win.
-- **Covariates:** everything known at the moment of the decision:
-  - own badge, enemy badge
-  - net worth, team net worth for both teams and the gap
-  - level, kills, deaths, assists
-  - game time, number of items bought so far
-  - **current inventory** (owned-items multi-hot)
+- **Covariates,** all known at the start of the visit:
+  - skill: match average badge, own rank, own rank minus team mean, calibration flag, win
+    streak entering the match
+  - assigned lane, whether a build is equipped
+  - net worth, both teams' net worth and the gap, level, kills, deaths, assists, and the age
+    of the snapshot they come from (up to 299 s)
+  - game time, purchases so far, **current inventory** (multi-hot)
   - hero composition of both teams
+  - Phase 2 adds enemy inventories by slot, objectives destroyed and mid-boss state.
 
-  Phase 2 adds enemy inventories by slot and objective state. Nothing measured after the
-  decision is used. Match duration is never a covariate.
+  Before the first snapshot (180 s) the state is the start-of-game state, never a later
+  snapshot. Match duration is never a covariate.
+- **Crossover, reported with every effect:** the share of the comparison group that buys X
+  within 10 minutes and by the end of the match. Labels are fixed now: under 25% by match end
+  is "choice", 25% to 50% is "mixed", 50% or more is "order".
 
-**What the answer means:** "Given a player is spending C now, choosing X instead of an
-alternative changes their win probability by τ." It does **not** cover buy-versus-save
-decisions or selling. Those are separate questions and we don't claim them.
-
-### 3.2 Multi-arm doubly robust estimation (`estimate/aipw.py`, built)
+### 3.3 Multi-arm doubly robust estimation (`estimate/aipw.py`; built, changes pending)
 The treatment has K values (which item), not two. We use cross-fitted AIPW for multi-valued
-treatments. This is the double machine learning approach of Chernozhukov et al. 2018, with
-average potential outcomes as in Cattaneo 2010 and the DoubleML `DoubleMLAPOS` model.
+treatments: double machine learning (Chernozhukov et al. 2018) with average potential outcomes
+as in Cattaneo 2010.
 
 - **Propensity model:** a multinomial classifier for P(choose k | state), set to zero for arms
   the player can't buy and then renormalized.
-- **Outcome model:** one per arm, P(win | state, chose k). Separate per-arm models stop the item
-  signal getting starved out, which is what happened to v1's global model.
+- **Outcome model:** one per arm, P(win | state, chose k).
 - **Cross-fitting:** 5 folds grouped by match. Standard errors are match-clustered.
-- **Overlap:** a row only counts toward a comparison if every arm in that comparison has
-  propensity ≥ 1% on that row. Rows are **dropped**, never clipped. We report the trimmed share
-  for each arm.
+- **Overlap:** an arm counts on a row only if it is eligible there with propensity ≥ 1%. Rows
+  are **dropped**, never clipped, and the dropped share is reported per arm. Each contrast
+  therefore has its own population. Joint trimming (Yang et al. 2016) is not usable here: it
+  would drop every row where the player already owns any arm.
 - **Outputs:**
-  - `pairwise(k, j)`: X versus Y directly, used by the shop tab.
-  - `vs_alternatives(k)`: X versus a randomly chosen buyable alternative. This is the single
-    per-item headline, with the same baseline for every arm.
+  - `pairwise(k, j)`: X versus Y directly, on rows where both are supported. Used by the shop
+    tab.
+  - **Headline per item: X instead of what the player actually bought,** averaged over
+    supported players who bought something else. Computed from the same scores as
+    `(mean(psi_k) − mean(Y)) / (1 − share_k)`. This replaces "X versus a uniformly random
+    alternative", which no player does and which gives a 2% item the weight of the default.
 - **Learners:** logistic for speed, LightGBM for the reported numbers. A result counts only if
   the two agree on sign and significance. Disagreement gets flagged.
 
-### 3.3 Effect over game time (`estimate/heterogeneity.py`, built)
-Kennedy's DR-learner (2023): regress the doubly robust pseudo-outcome on a cubic spline in game
-time, with a clustered sandwich variance. That gives one smooth curve per item with honest
-confidence bands, instead of v1's overlapping windows. "Best timing" is reported only when a
-band clearly separates. We never take the max over grid points.
+### 3.4 Effect over game time (`estimate/heterogeneity.py`, built)
+Regress the doubly robust pseudo-outcome on a cubic spline in game time with a clustered
+sandwich variance (Kennedy 2023; Semenova & Chernozhukov 2021). The bands are pointwise.
+"Best timing" is reported only from a uniform band (cluster bootstrap, Phase 3) that clearly
+separates. We never take the max over grid points.
 
-### 3.4 Rankings and multiple testing (built)
+### 3.5 Rankings and multiple testing (built)
 - **Empirical-Bayes shrinkage** (normal-normal, DerSimonian-Laird variance) across items within
-  a hero. Rankings and tier lists use the shrunk values, so a noisy item can't reach the top on
-  luck.
-- **Benjamini-Hochberg FDR** across the whole family (hero × cost × arm), applied everywhere an
+  a hero. Lists use the shrunk values and are called "buy next" lists, not tier lists.
+- **Benjamini-Hochberg FDR** across the whole family (hero × price × arm), applied everywhere an
   item gets called "significant", including the pages.
 
-### 3.5 Sensitivity to unmeasured confounding (Phase 3)
-No observational design can rule out confounders we don't measure, such as individual skill
-within a team. For every headline effect we report omitted-variable-bias bounds for DML
-(Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022, available in DoubleML's
-`sensitivity_analysis`). The robustness value answers: how strong would a hidden confounder
-need to be to erase this effect? Benchmark it against observed covariates, for example
-"as strong as badge".
+### 3.6 Sensitivity to unmeasured confounding (Phase 3)
+Omitted-variable-bias bounds for DML (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022),
+implemented here for the headline and pairwise contrasts. The robustness value answers: how
+strong would a hidden confounder need to be to erase this effect? Benchmark it against observed
+covariates ("as strong as rank"). DoubleML 0.11.4 cannot cluster its multi-level model or
+restrict levels per row, so it is a cross-check on a synthetic case, not the engine.
+
+### 3.7 Power
+Per 13-day patch window, the median item's 95% half-width is about 1.3pp for the least-played
+hero, 0.8pp for a median hero and 0.5pp for the most-played. Detectable effects at 80% power
+are about 1.4 times that. These figures are optimistic (design_checks §3). Windows can be
+pooled for items a patch did not touch, with patch as a covariate.
 
 ## 4. Falsification: how we'll know if it's wrong
 
-These checks are decided before any hero results exist. A design change is accepted when it
-passes them, not when the output "looks right". **There is no "items must matter" principle.**
-An effect near zero is an allowed answer.
+The thresholds below are fixed before any hero results exist. A design change is accepted when
+it passes them, not when the output "looks right". **There is no "items must matter"
+principle.** An effect near zero is an allowed answer.
 
-1. **Negative-control outcomes.** Run the same estimator on outcomes that happened *before* the
-   decision: net-worth gain and deaths in the 3 minutes before it. The true effect is zero by
-   construction. A non-zero result means confounding is leaking through. This is the main test
-   v1 never had.
-2. **Placebo arms.** Randomly split one item's buyers into two fake arms. Their difference has
-   to be about zero, with roughly 95% of confidence intervals covering zero.
-3. **Week-to-week replication.** Estimate on week A, then re-estimate on week B of the same
-   patch. Report sign agreement and the correlation of effects.
-4. **Patch diff-in-diff.** When an item is buffed or nerfed, its effect should move the right
-   way relative to items that weren't changed. This doesn't depend on overlap, so it is the
-   strongest external check.
-5. **Synthetic recovery tests** of the estimator with known truth, already in `tests/`.
-6. **WPA baseline.** Implement a Statlocker-style WPA on the same data, so "better than WPA"
-   becomes a measured comparison.
+1. **Negative control, player level.** Outcome: the same player's previous Ranked match result.
+   The true effect is zero, it is on the same scale as the real outcome, and it catches
+   skill or form that rank misses. Run it with win streak left out of the covariates. Across a
+   hero's arms, fit a mean μ and between-arm SD τ. **Pass: |μ| ≤ 0.2pp and τ ≤ 0.3pp.** Reported
+   intervals are then widened by τ (Schuemie et al. 2018).
+2. **Negative control, in-game.** Outcomes: souls gained and deaths over the snapshot interval
+   before the visit. Neither is ever a covariate. **Pass: adjusted difference ≤ 0.1 SD for at
+   least 90% of arms, and ≤ 0.05 SD on average.**
+3. **Standard-error calibration.** Randomly split one item's buyers into two fake arms, 200
+   times. **Pass: 92% to 98% of intervals cover zero.** This checks the SEs. It cannot detect
+   confounding.
+4. **Split-half stability.** Estimate on two random halves of a window.
+   **Pass: at most 10% of arms differ by more than 1.96 combined SEs.** This is stability, not
+   validity: confounding replicates too.
+5. **Patch diff-in-diff.** For each item a patch changed: the change in its effect minus the
+   mean change for untouched arms at the same hero and price. Buff or nerf direction is coded
+   from the patch notes before estimating. **Pass: sign agreement ≥ 70%** among changed items
+   with a half-width of 2pp or less. The direction is known from outside the data, so this is
+   the strongest check.
+6. **Synthetic recovery** with known truth in `tests/`, including crossover, same-visit and
+   component cases.
+7. **WPA baseline.** A Statlocker-style WPA on the same data, so "better than WPA" becomes a
+   measured comparison.
 
 ## 5. Phases
 
 | # | Phase | Output | Exit criteria |
 |---|---|---|---|
 | 0 | Scaffold, design, ported plumbing | this repo; risk-set frame, multi-arm AIPW, DR curves, EB, BH; 21 tests | ✅ done 2026-10-13 |
-| 1 | **Data** | run the extended `extract.py` on live dumps: verify `sold_time_s`, enemy badge, level/K/D/A columns; add patch/date (map match_id→start_time); pull **2+ weeks of one patch** and one week either side of a balance patch | column checks pass; corpus has patch IDs |
-| 2 | **State enrichment** | enemy inventory by slot at t, objectives destroyed, pre-decision 3-min deltas (for negative controls); interpolate net worth between 180s snapshots | fixture tests for each new column |
-| 3 | **First hero end to end** (Mirage, so it can be compared with v1) | effect table + pairwise matrix + DR curves at every cost; logistic vs lgbm; OVB sensitivity | all of §4.1-4.2 pass on Mirage |
-| 4 | **Falsification suite** as code | `validate/` module: negative controls, placebo arms, week replication, WPA baseline | runs per hero, writes a pass/fail report |
-| 5 | Roster | all heroes, FDR across the family, EB-shrunk rankings | §4.1-4.3 pass for ≥80% of heroes; failures listed, not hidden |
-| 6 | Pages | port v1's hero-page template: curves with bands, shop tab from `pairwise`, sensitivity shown per item | every number on a page traces to a cached table |
-| 7 | Patch diff-in-diff | DiD for every buffed or nerfed item across one patch | sign agreement reported |
+| 0b | Design checks against live data | `docs/design_checks_2026-10-13.md`, `docs/data_dumps.md`, this revision | ✅ done 2026-10-13 |
+| 1 | **Data** | `extract.py` on the new data lake: manifest-driven URLs, §3.1 filters, shop items from the assets API, drop same-click component rows, consumed flag and price paid, skill and lane columns, start-of-game state before 180 s, patch label from `start_time`, previous-match link, prior-interval souls and deaths. Extract both patch windows. | fixture test per new column; match counts within 2% of the volume table in `data_dumps.md` |
+| 2 | **Frame and estimator fixes** | visits, price paid, component eligibility, `sold >= t`; headline estimand; LightGBM with two arms; NaN handling; fold-absent arms counted in `trim_share`; explain the 0.2pp synthetic gap; enemy inventories and objectives | fixture tests for each; synthetic tests of §4.6 pass; crossover and power table for the first hero |
+| 3 | **First hero end to end** (Haze: most data in both windows) | effect table, pairwise matrix and DR curves at every price, each with its crossover label; logistic vs LightGBM; OVB bounds; wall time per (hero, price) | §4.1 to 4.4 pass on Haze; roster compute budget written down |
+| 4 | **Falsification suite** as code | `validate/` module: both negative controls, SE calibration, split-half, WPA baseline | runs per hero, writes a pass/fail report |
+| 5 | Roster | all heroes, FDR across the family, EB-shrunk "buy next" lists; Mirage reported as the low-power case | §4.1 to 4.4 pass for ≥80% of heroes; failures listed, not hidden |
+| 6 | Pages | port v1's hero-page template: curves with bands, shop tab from `pairwise`, crossover label and sensitivity shown per item | every number on a page traces to a cached table |
+| 7 | Patch diff-in-diff | §4.5 across 09-16 → 09-29 and each later patch | sign agreement reported |
+| 8 | Ownership estimand (optional) | "own X by minute T" by clone-censor-weight with a grace period and time-varying covariates | its own falsification set, written before any results |
 
-## 6. Ported from v1, and what changed
-- `assets/decoder.py`, `api/client.py`: unchanged.
-- `ingest/extract.py`: now also extracts `sold_time_s`, `enemy_avg_badge`, and
-  level/kills/deaths/assists at the last snapshot. It accepts local source paths, so the SQL is
-  tested against a hand-built fixture (`tests/test_extract.py`).
-- `estimate/fdr.py`: Benjamini-Hochberg, unchanged.
-- v1's `crossfit_aipw` was replaced by the multi-arm version. Its cross-fit and clustered-SE
-  logic carries over.
+## 6. Code status
+- `assets/decoder.py`, `api/client.py`: ported unchanged. The decoder docstring is wrong about
+  components.
+- `ingest/extract.py`: ported and extended, tested on a hand-built fixture. It targets the old
+  bucket. The SQL itself runs on the new layout (smoke-tested on 3,000 matches).
+- `frame/risk_set.py`, `estimate/aipw.py`: built and tested on synthetic data. The defects to
+  fix are listed in design_checks §6.
+- `estimate/heterogeneity.py`, `estimate/fdr.py`: built.
 
-Not ported: the global win-prob model, the benchmark, the windowed decision frame, and every
-cached table and page.
+Not ported from v1: the global win-prob model, the benchmark, the windowed decision frame, and
+every cached table and page.
 
 ## 7. Known limits we accept
 - Covariates are observed, so effects are "deconfounded on observables", backed by the
-  sensitivity bounds. We don't claim more than that.
-- Economy snapshots come every 180s. Interpolation (Phase 2) helps, but the timing isn't exact.
+  sensitivity bounds and the negative controls. We don't claim more than that.
+- Ranked players only. Party membership is not in the data.
+- Component upgrades and multi-item visits are outside the comparison (about 30% and 17% of
+  purchases).
+- State comes from snapshots up to 5 minutes old. Inventory is exact.
+- A sell and re-buy of the same item cannot be seen.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-13**: Thresholds in §4 written down with numbers. They are proposals until Phase 3
+  starts and frozen from then.
+- **2026-10-13**: Added the previous-match negative control and the dev/confirm split. Relabelled
+  placebo arms as SE calibration and replication as stability.
+- **2026-10-13**: Headline changed to "X instead of what the player actually bought". The
+  uniform-alternative baseline was not a choice anyone makes.
+- **2026-10-13**: Estimand named as "X now vs Y now" and published with a crossover label.
+  Crossover by match end is 50% or more for 24 of 120 top Mirage pairs; at 90% the estimator
+  returns about zero for a +3pp item. Ownership estimand deferred to Phase 8.
+- **2026-10-13**: Unit is a shop visit; trials are full-price purchases; arms need 2,500 buys.
+  17% of purchases share a visit with a same-cost purchase and 30.5% are component upgrades.
+- **2026-10-13**: Population is Ranked only. Team badges have been 0 since Ranked launched on
+  2026-07-30; Ranked rows carry per-player rank and win streak.
+- **2026-10-13**: First hero is Haze, not Mirage. Mirage is the least-played Ranked hero (23k
+  player-matches per window against 129k), and v1's Mirage numbers are not a usable benchmark.
+- **2026-10-13**: Data source moved to `data.deadlock-api.com`; `docs/data_dumps.md` rewritten.
 - **2026-10-13**: v2 started. Design: sequential target trial, eligibility-restricted
   multi-arm AIPW, DR-learner time curves, EB plus BH, DML OVB sensitivity. Falsification
   criteria fixed before any results (§4).
 
 ## References
 - Hernán & Robins (2016), *Using big data to emulate a target trial when a randomized trial is not available*, AJE.
-- Danaei et al. (2013), sequential trials for time-varying treatments, *Stat Methods Med Res*.
+- Hernán et al. (2008), observational studies analyzed like a sequence of randomized trials, Epidemiology.
+- Danaei et al. (2013), emulated trials with time-varying treatment, *Stat Methods Med Res*.
+- Cain et al. (2010), dynamic strategies with grace periods (clone-censor-weight), Int J Biostat.
 - Chernozhukov et al. (2018), *Double/debiased machine learning*, Econometrics Journal.
 - Cattaneo (2010), efficient semiparametric estimation of multi-valued treatment effects, J. Econometrics.
-- Kennedy (2023), *Towards optimal doubly robust estimation of heterogeneous causal effects*, EJS ([arXiv 2004.14497](https://arxiv.org/abs/2004.14497)).
-- Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022), *Long story short: omitted variable bias in causal machine learning*.
+- Yang, Imbens, Cui, Faries & Kadziola (2016), propensity methods with multi-level treatments, Biometrics.
 - Crump, Hotz, Imbens & Mitnik (2009), dealing with limited overlap, Biometrika.
+- Kennedy (2023), *Towards optimal doubly robust estimation of heterogeneous causal effects*, EJS ([arXiv 2004.14497](https://arxiv.org/abs/2004.14497)).
+- Semenova & Chernozhukov (2021), debiased ML of conditional average treatment effects and other causal functions, Econometrics Journal ([arXiv 1702.06240](https://arxiv.org/abs/1702.06240)).
+- Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022), *Long story short: omitted variable bias in causal machine learning*, NBER w30302 ([arXiv 2112.13398](https://arxiv.org/abs/2112.13398)).
 - Lipsitch, Tchetgen Tchetgen & Cohen (2010), negative controls, Epidemiology.
+- Schuemie et al. (2018), empirical confidence interval calibration, PNAS.
 - Bach et al. (2022), *DoubleML: an object-oriented implementation of double machine learning in Python*, JMLR ([arXiv 2104.03220](https://arxiv.org/abs/2104.03220)).

@@ -8,19 +8,27 @@ It replaces `DL_Decision_Analytics`. The v1 control group included players who a
 the item, which biased effects toward zero. See [`PLAN.md`](PLAN.md) §2 for the full list.
 
 ## Method
-- **Sequential target-trial emulation:** every shop purchase is a small trial among the
-  same-cost items the player doesn't already own (`frame/risk_set.py`).
+- **Sequential target-trial emulation:** every shop visit is a small trial among the
+  same-price items the player doesn't already own (`frame/risk_set.py`).
 - **Multi-arm cross-fitted AIPW**, a doubly robust estimator with match-clustered SEs and
   overlap trimming (`estimate/aipw.py`).
 - **DR-learner spline curves** that show the effect over game time
   (`estimate/heterogeneity.py`).
 - **Empirical-Bayes shrinkage** for rankings and **Benjamini-Hochberg FDR** for significance.
-- **Falsification checks fixed in advance:** negative-control outcomes, placebo arms,
-  week-to-week replication, patch diff-in-diff, and a WPA baseline (PLAN §4).
+- **Falsification checks with thresholds fixed in advance:** negative-control outcomes,
+  standard-error calibration, split-half stability, patch diff-in-diff, and a WPA baseline
+  (PLAN §4).
+
+The estimate is "X now instead of Y now". It is published with a crossover rate, because for
+the most-bought items it is a question about build order and not about the value of owning
+the item (PLAN §1).
 
 ## Status
 Phase 0 is done: the design, the core estimators, and ported data plumbing, with 21 passing
-tests. The next step is Phase 1: run the extended extraction against the live data dumps.
+tests. The design was then checked against the live data
+([`docs/design_checks_2026-10-13.md`](docs/design_checks_2026-10-13.md)), which changed the
+plan: Ranked matches only, shop visits as the unit, full-price purchases as the trials. The
+next step is Phase 1: repoint the extraction at the new data lake.
 
 ## Setup
 ```bash
@@ -29,4 +37,4 @@ pip install -r requirements.txt
 python -m pytest -q
 ```
 
-Data: deadlock-api.com data dumps (see `docs/data_dumps.md`). Not affiliated with Valve.
+Data: the deadlock-api.com data lake (see `docs/data_dumps.md`). Not affiliated with Valve.
