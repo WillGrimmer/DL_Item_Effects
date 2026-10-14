@@ -183,7 +183,7 @@ principle.** An effect near zero is an allowed answer.
 | 0b | Design checks against live data | `docs/design_checks_2026-10-13.md`, `docs/data_dumps.md`, this revision | ✅ done 2026-10-13 |
 | 1 | **Data** | `extract.py` on the new data lake: manifest-driven URLs, §3.1 filters, shop items from the assets API, drop same-click component rows, consumed flag and price paid, skill and lane columns, start-of-game state before 180 s, patch label from `start_time`, previous-match link, prior-interval souls and deaths. Extract both patch windows. | ✅ done 2026-10-13: 175,188 and 204,837 matches (−0.4% and −0.2% vs the volume table) |
 | 2 | **Frame and estimator fixes** | visits, price paid, component eligibility, `sold >= t`; headline estimand; LightGBM with two arms; NaN handling; fold-absent arms counted in `trim_share`; explain the 0.2pp synthetic gap; enemy inventories and objectives | ✅ done 2026-10-13: 59 tests; Haze tables in `data/processed/reports/` |
-| 3 | **First hero end to end** (Haze: most data in both windows) | effect table, pairwise matrix and DR curves at every price, each with its crossover label; logistic vs LightGBM; OVB bounds; wall time per (hero, price) | §4.1 to 4.4 pass on Haze; roster compute budget written down |
+| 3 | **First hero end to end** (Haze: most data in both windows) | effect table, pairwise matrix and DR curves at every price, each with its crossover label; logistic vs LightGBM; OVB bounds; wall time per (hero, price) | §4.1 to 4.4 pass on Haze; roster compute budget written down. **Falsification run 2026-10-14: §4.1 fails, see log; confirm not run** |
 | 4 | **Falsification suite** as code | `validate/` module: both negative controls, SE calibration, split-half, WPA baseline | runs per hero, writes a pass/fail report |
 | 5 | Roster | all heroes, FDR across the family, EB-shrunk "buy next" lists; Mirage reported as the low-power case | §4.1 to 4.4 pass for ≥80% of heroes; failures listed, not hidden |
 | 6 | Pages | port v1's hero-page template: curves with bands, shop tab from `pairwise`, crossover label and sensitivity shown per item | every number on a page traces to a cached table |
@@ -219,6 +219,14 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-14**: Haze falsification (LightGBM, 8 frames = 2 windows x 4 prices, 77 min).
+  §4.2 passes everywhere (adjusted differences at most 0.03 SD). §4.1 fails everywhere: the
+  previous-match control is negative in 7 of 8 frames, -0.34pp (SE 0.10) pooled in 09-16 and
+  -0.28pp (SE 0.10) in 09-29. Applied per frame, the rule fails 44% to 67% of the time with no
+  confounding at all, but the pooled estimates fail it too. §4.3 passes in 5 of 8 frames
+  (coverage 0.915 to 0.990) and §4.4 in 6 of 8 (one late-game frame has Siphon Bullets at
+  z -2.86). Phase 3 exit is not met. The confirm stage has not run. Open questions are in
+  `docs/HANDOFF.md` §7.
 - **2026-10-14**: LightGBM, not logistic, runs the falsification checks. On the largest Haze
   frame (260k training rows, 417 covariates, 9 arms) one propensity fold takes 17 s with
   LightGBM against 63 s for logistic, and held-out log-loss is 1.020 against 1.113. The

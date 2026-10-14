@@ -66,3 +66,8 @@ def test_null_fail_rate_reflects_the_rules_noise_floor():
     tight = analysis.null_fail_rate(np.full(9, 0.0002))      # 0.02pp per arm
     loose = analysis.null_fail_rate(np.full(9, 0.006))       # 0.6pp per arm, pooled ~0.2pp
     assert tight < 0.01 and 0.15 < loose < 0.5
+
+
+def test_shuffled_negative_control_keeps_one_value_per_player(frame):
+    r = analysis.nc_player_shuffled(frame, np.ones(len(frame), bool), seed=3)
+    assert set(r) >= {"mu", "tau", "table"} and abs(r["mu"]) < 0.01

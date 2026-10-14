@@ -10,6 +10,8 @@ Stages (results under data/processed/results/hero_<id>/patch_<patch>/):
 * ``confirm``: the reported tables on the other 80%, run once the design is frozen: headline
   per arm with crossover label, pairwise matrix, curves over game time, OVB bounds benchmarked
   against the skill covariates, and BH q-values.
+* ``shuffle``: §4.1 on a shuffled previous-match result (true effect zero), to tell an
+  estimator artifact from real confounding. Writes ``shuffle_<learner>_<price>_nc_player.csv``.
 * ``compare``: after ``confirm`` has run with both learners, the agreement table (PLAN.md §3.3:
   a result counts only if logistic and LightGBM agree on sign and significance at q < 0.05).
 
@@ -102,6 +104,13 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
                             passed=s["passed"]),
             passed=bool(p["passed"] and g["passed"] and c["passed"] and s["passed"]))
 
+    elif stage == "shuffle":
+        e_ns = cached_propensities(df, out, learner, "nostreak", drop=("win_streak",))
+        p = analysis.nc_player_shuffled(df, allr, learner, e_all=e_ns, seed=1)
+        p["table"].assign(item=_names(decoder, p["table"]["arm"])).to_csv(
+            out / f"{tag}_nc_player.csv", index=False)
+        summary.update(nc_player_shuffled=dict(mu=p["mu"], tau=p["tau"]))
+
     elif stage == "confirm":
         conf = ~dev
         fit = analysis.fit_rows(df, conf, learner, e_hat=e_all[conf])
@@ -157,7 +166,7 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Phase 3: one hero end to end.")
     ap.add_argument("--hero", type=int, required=True)
     ap.add_argument("--patch", required=True)
-    ap.add_argument("--stage", choices=("dev", "falsify", "confirm", "compare"), required=True)
+    ap.add_argument("--stage", choices=("dev", "falsify", "shuffle", "confirm", "compare"), required=True)
     ap.add_argument("--learner", choices=("logistic", "lgbm"), default="logistic")
     ap.add_argument("--prices", type=int, nargs="*", default=list(PRICES))
     a = ap.parse_args(argv)

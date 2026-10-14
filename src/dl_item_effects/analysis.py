@@ -85,6 +85,19 @@ def nc_player(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
                 null_fail_rate=null_fail_rate(tab["se"].to_numpy()))
 
 
+def nc_player_shuffled(df: pd.DataFrame, rows: np.ndarray, learner: str = "logistic",
+                       e_all: np.ndarray | None = None, seed: int = 1) -> dict:
+    """§4.1 on a shuffled previous-match result: one value per (match, account), permuted
+    across player-matches that have a previous match. The true effect is exactly zero and no
+    confounding can exist, so a mu clearly away from zero here would be an estimator artifact.
+    Haze, 2026-10-14: shuffled +0.05pp and +0.11pp per window against real -0.34 and -0.28."""
+    rng = np.random.default_rng(seed)
+    key = df["match_id"].astype("int64") * 10**10 + df["account_id"].astype("int64")
+    per_player = df.groupby(key)["nc_prev_won"].first().dropna()
+    shuffled = pd.Series(rng.permutation(per_player.to_numpy()), index=per_player.index)
+    return nc_player(df.assign(nc_prev_won=key.map(shuffled)), rows, learner, e_all=e_all)
+
+
 def _nc_player_rule(eb: dict) -> bool:
     return (abs(eb["prior_mean"]) <= THRESHOLDS["nc_player_mu"]
             and eb["tau"] <= THRESHOLDS["nc_player_tau"])
