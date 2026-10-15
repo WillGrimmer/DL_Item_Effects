@@ -4,7 +4,7 @@ Written 2026-10-14 for an agent starting with a fresh context. Read this first, 
 [`PLAN.md`](../PLAN.md). Everything below was checked against the repo and data on disk at the
 time of writing.
 
-## 0. Update, 2026-10-14 evening: §7 decided, rerun PAUSED partway (read this first)
+## 0. Update, 2026-10-15 01:10: §7 decided, rerun done, §4.1 still fails (read this first)
 
 Will accepted §7's recommendation for both questions (PLAN §8 entry of 2026-10-14). Built and
 committed (70+ tests pass):
@@ -24,52 +24,48 @@ committed (70+ tests pass):
   and synth; `--stage pool` recomputes it from saved files; `--stage synth`.
 - Old per-frame outputs were moved to `results/hero_13/patch_*/pre_history_2026-10-14/`.
 
-**Rerun state when paused (19:30 EDT, Will asked to pause):** only 09-16 falsify at 800 and
-1600 finished. 3200 has its propensities cached and `nc_player` written, nothing else. The
-log is `data/processed/results/hero_13/rerun_2026-10-14.log` (per-frame JSON lines).
+- **Learner change (PLAN §8, 2026-10-14):** LightGBM outcome models stop early on held-out
+  matches (patience 50, max 1000 trees); propensities keep 400 trees. Fits run 4 at a time
+  with 4 threads each. On the dev set the fixed 400 trees did worse than a constant on the
+  negative-control outcomes. Falsify now takes about 20 min per Haze window instead of 50.
 
-| Frame | §4.1 μ (τ) | next-match μ (τ) | §4.2 | §4.3 cov | §4.4 share (z SD) |
+**Rerun results (Haze, LightGBM, both windows, 2026-10-14 23:52 to 2026-10-15 01:08, commit
+`ae8c60c`).** Log: `data/processed/results/hero_13/rerun_2026-10-14.log`. Window-level files:
+`results/hero_13/patch_*/pooled_{falsify,synth,shuffle}_lgbm.json`. Pooled μ in pp; bootstrap
+SEs (match- and account-clustered agree) are about 0.09 to 0.10 in every cell:
+
+| Window | §4.1 real, previous match | Next match (full production covariates) | Synth previous (truth 0) | Synth next (truth 0) | Shuffle (truth 0) |
 |---|---|---|---|---|---|
-| 09-16 · 800 | −0.40pp (0.00) | −0.48pp (0.00) | ✓ | 0.945 ✓ | 0.00 (0.66) ✓ |
-| 09-16 · 1600 | −0.27pp (0.00) | +0.01pp (0.50) | ✓ | 0.965 ✓ | 0.00 (1.00) ✓ |
+| 09-16 | **−0.38** (τ 0.00) ✗ | **−0.22** (τ 0.29) | −0.06 ✓ | +0.16 ✓ | +0.07 ✓ |
+| 09-29 | **−0.21** (τ 0.28) ✗ | **−0.26** (τ 0.26) | −0.03 ✓ | −0.02 (τ 0.42) | +0.13 ✓ |
 
-Early read: the history covariates did not remove the shift (−0.24pp to −0.30pp before,
-for these two frames). The next-match diagnostic is −0.48pp at 800 but +0.01pp at 1600, so
-it is mixed after two frames. The shuffle can't detect bias that comes from the nuisance
-models fitting a real covariate–outcome signal. History makes that signal strong, so
-`--stage synth` was added. It draws the outcome from a pooled covariates-only model, so the
-true effect is zero with realistic signal. If synth shows the same −0.3pp, the problem is the
-estimator, not confounding.
+Other checks, all frames:
+- §4.2 passes in all 8 frames.
+- §4.3 coverage is 0.925 to 0.985 (09-29 · 6400 at 0.985 is just over 0.98, within 200-rep
+  noise).
+- §4.4 pooled passes: 4.8% of 42 arms (09-16) and 2.6% of 38 (09-29).
+- Bootstrap: the SE ratio to nominal is 1.00 to 1.01, so the per-arm SEs are honest. The
+  rule's real chance-fail rate is 17% to 25%.
 
-**6400 anomaly (from §7) checked:** the outcome models do not collapse. On the shuffled
-outcome, LightGBM's out-of-fold predictions range from 0.06 to 0.97 on a coin flip, which is
-heavy overfitting. The near-exact cancellation of the precision-weighted mean recurs (1e-8,
-2e-5 and 9e-4 over seeds 1 to 3, against a nominal SE of 2e-3). The arms' vs-actual estimates
-are probably negatively correlated, so the nominal FE SE misstates the pooled mean. The new
-bootstrap measures this. Extra Spirit (old 09-29 · 800 split-half z −4.02) is not yet
-investigated; recheck it once the new split-half for that frame exists.
+**What it means:**
+1. **The estimator is not the problem.** With a true effect of zero and realistic covariate
+   signal (synth), and with no signal (shuffle), the pooled estimates are within about 1.5
+   SEs of zero. The 6400 "1e-8" anomaly was a property of the shuffled outcome with
+   overfitting outcome models, and does not recur with early stopping.
+2. **Residual confounding of about −0.25pp to −0.3pp remains** after the history
+   covariates. The previous match pooled over both windows is about −0.30pp (SE 0.07), and
+   the fully adjusted next match is about −0.24pp (SE 0.07). The nulls centre at about
+   +0.05pp.
+3. **The next match fails too, so this is not only "tilt" from the last result**, which
+   production adjusts for. By §7's reading rules this is the "both fail" branch: **Will
+   decides, before confirm, whether to stop, change the design further, or report calibrated
+   intervals.** Confirm has not run.
+4. **Pattern:** in 09-16 the most negative previous-match arms are the mainstream picks
+   (Burst Fire, Ricochet, Active Reload, Bullet Lifesteal, Lucky Shot), and positive arms are
+   mostly niche ones with high trim shares. Per arm, the previous- and next-match effects are
+   uncorrelated (r 0.06).
 
-**To resume** (one job at a time, from the repo root with `PYTHONPATH=src`; about 2 h 20 min
-in total):
-
-```bash
-python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage falsify --learner lgbm --prices 3200 6400
-python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage shuffle --learner lgbm
-python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage falsify --learner lgbm
-python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage shuffle --learner lgbm
-python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage synth --learner lgbm
-python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage synth --learner lgbm
-python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage pool --learner lgbm
-```
-
-The `--prices 3200 6400` run overwrites `summary_falsify_lgbm.json` with those two prices and
-pools only them, so finish with `--stage pool`, which pools all four from the saved CSVs. The
-800 and 1600 summaries are in the log. Then read the pooled results using §7's "How to read
-the rerun", with synth deciding whether a failure is the estimator or the data.
-
-**Compute note:** falsify now takes about 50 min per Haze window (two propensity sets plus
-the next-match fits), and LightGBM overfits these outcomes. Before Phase 5 consider early
-stopping or fewer trees; that changes the learner, so log it.
+The pre-rerun §0 notes (built code, the 6400 anomaly) still apply.
 
 ## 1. Where things stand
 
@@ -78,7 +74,7 @@ stopping or fewer trees; that changes the learner, so log it.
 | 0, 0b (scaffold, design checks) | done |
 | 1 (data) | done: two Ranked patch windows extracted, 175,188 and 204,837 matches |
 | 2 (frame and estimator) | done: 61 tests pass |
-| 3 (Haze end to end) | **in progress.** §7 decided; rerun with history covariates paused partway (§0). Confirm has **not** run |
+| 3 (Haze end to end) | **in progress.** §7 decided; rerun done (§0): §4.2 to 4.4 pass, §4.1 and next-match fail by about −0.25pp; estimator checks clean. Blocked on Will's decision. Confirm has **not** run |
 | 4 to 8 | not started |
 
 - **Repo:** `C:\Users\Will\Code\Projects\DL_Item_Effects`, GitHub `WillGrimmer/DL_Item_Effects`.
