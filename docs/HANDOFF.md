@@ -67,6 +67,52 @@ Other checks, all frames:
 
 The pre-rerun §0 notes (built code, the 6400 anomaly) still apply.
 
+**Diagnostics run after the rerun (2026-10-15, scratch scripts, nothing in the design changed):**
+
+- **Extra Spirit is explained: it was chance on a reused split.** Its z of −3.5 (and −4.02
+  before) both came from the seed-800 halves, which every run shared. With four fresh seeds
+  its split-half z is −0.13, −0.41, +1.39 and −1.51
+  (`patch_09-29-2026/diag_extra_spirit_split_half_seeds.csv`). Its weight tails are mid-pack
+  (top 1% of buyers carry 11% of the weight). Per-frame split-half is very noisy anyway: the
+  same 7-arm frame's z SD ranges from 0.72 to 1.61 across seeds. The pooled §4.4 rule is
+  the right level.
+- **Experience proxies don't explain the residual.** On 09-16 at 3200 and 800, these
+  covariates were added and §4.1 and the next match were refit:
+  - earlier Haze matches in the window, and the win rate on them;
+  - the uncapped Ranked history count;
+  - account-id rank (Steam ids are sequential, so it proxies account age).
+
+  The previous-match shift shrank (−0.69 → −0.53pp, −0.34 → −0.20pp), but that is partly a
+  leak: the Haze win rate includes the previous match whenever it was a Haze game (r +0.29
+  with the outcome). The clean read, the next match, did not move: −0.57 → −0.60pp and
+  −0.46 → −0.49pp. Full hero experience would need history re-extracted with hero_id; given
+  this, it is unlikely to help.
+
+### Decision for Will (blocks confirm)
+
+The design adjusts for everything observable that plausibly matters. A systematic shift of
+about −0.25pp (SE about 0.05 across the two controls and windows) remains on outcomes the
+item cannot affect. The options:
+
+1. **Calibrate and continue (recommended).** Treat the two negative controls as measuring
+   the design's systematic error, as Schuemie et al. 2018 empirical calibration does. Report
+   every item effect with its interval widened by that error, so an effect counts only if it
+   clears it. With item effects of 0.5 to 1.5pp and a bias of about 0.25pp, the larger
+   effects stay readable. This changes PLAN §4.1's "pass, then widen by τ" into "fail,
+   calibrate". The memo argued against using calibration to absorb a fail, so it needs your
+   explicit yes, and a choice between **widening only** (the memo's "never shift") and
+   **shifting and widening** (full empirical calibration). The bias has the same sign in
+   every control, so shifting is defensible.
+2. **Stop at Haze and reframe.** Publish the design, the falsification and the bias size as
+   the result: observational item effects below about ±0.5pp are not identifiable from this
+   data. Cheap and honest, but no item rankings.
+3. **Keep changing the design.** Remaining candidates are weak: full-history hero
+   experience (re-extract), and time of day or queue context. Each costs a rerun (about 45
+   min per hero now), and the experience screen suggests low odds.
+
+Whatever the choice, confirm runs only after it is logged in PLAN §8.
+
+
 ## 1. Where things stand
 
 | Phase | State |
