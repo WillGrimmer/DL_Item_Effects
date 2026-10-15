@@ -43,15 +43,17 @@ from . import analysis, config
 from .assets import ItemDecoder
 from .estimate import benjamini_hochberg, dr_curve, effect_table, pairwise_table, two_sided_p
 from .estimate.heterogeneity import empirical_bayes
-from .pipeline import build_frame, load_hero_window
+from .pipeline import POPULATIONS, build_frame, load_hero_window
 
 PRICES = (800, 1600, 3200, 6400)
 NC_OUTCOMES = ("nc_player", "nc_next")
 CURVE_GRID_S = np.arange(300, 2701, 150)
 
 
-def results_dir(hero_id: int, patch: str) -> Path:
+def results_dir(hero_id: int, patch: str, population: str = "all") -> Path:
     d = config.PROCESSED_DIR / "results" / f"hero_{hero_id}" / f"patch_{patch}"
+    if population != "all":
+        d = d / f"pop_{population}"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -238,9 +240,11 @@ def main(argv: list[str] | None = None) -> None:
                     required=True)
     ap.add_argument("--learner", choices=("logistic", "lgbm"), default="logistic")
     ap.add_argument("--prices", type=int, nargs="*", default=list(PRICES))
+    ap.add_argument("--population", choices=tuple(POPULATIONS), default="oracle_plus",
+                    help="match population (PLAN.md §8, 2026-10-15: Oracle 1 and up)")
     a = ap.parse_args(argv)
 
-    out = results_dir(a.hero, a.patch)
+    out = results_dir(a.hero, a.patch, a.population)
     if a.stage == "pool":
         for st in ("falsify", "shuffle", "synth"):
             print(json.dumps(pool(out, st, a.learner, a.prices), indent=1, default=float))
@@ -252,8 +256,8 @@ def main(argv: list[str] | None = None) -> None:
         return
     decoder = ItemDecoder.load()
     t0 = time.monotonic()
-    w = load_hero_window(a.patch, a.hero)
-    print(f"loaded hero {a.hero} {a.patch}: {len(w.events):,} purchases "
+    w = load_hero_window(a.patch, a.hero, min_badge=POPULATIONS[a.population])
+    print(f"loaded hero {a.hero} {a.patch} ({a.population}): {len(w.events):,} purchases "
           f"({time.monotonic() - t0:.0f} s)", flush=True)
     summaries = []
     for price in a.prices:

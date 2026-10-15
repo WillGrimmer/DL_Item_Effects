@@ -21,6 +21,9 @@ from .frame import (add_composition, add_enemy_inventory, add_objectives, add_pl
                     covariate_columns, decision_frame, history_features)
 
 ENEMY_COLUMNS = ["match_id", "team", "item_id", "game_time_s", "sold_time_s"]
+# Populations by minimum match-average badge on the linear scale 6 * tier + sub (PLAN.md §8,
+# 2026-10-15). Oracle is tier 8, so Oracle 1 is 49.
+POPULATIONS = {"all": None, "oracle_plus": 49}
 
 
 @dataclass
@@ -48,7 +51,10 @@ def window_dir(patch: str) -> Path:
     return config.PROCESSED_DIR / "events" / f"patch_{patch}"
 
 
-def load_hero_window(patch: str, hero_id: int, events_dir: str | Path | None = None) -> HeroWindow:
+def load_hero_window(patch: str, hero_id: int, events_dir: str | Path | None = None,
+                     min_badge: int | None = None) -> HeroWindow:
+    """One hero's window. ``min_badge`` keeps only matches whose average badge (linear
+    ``badge_level``) is at least that; player history still covers all of a player's matches."""
     d = Path(events_dir or window_dir(patch))
     parts = sorted(d.glob("part-*.parquet"))
     if not parts:
@@ -56,7 +62,9 @@ def load_hero_window(patch: str, hero_id: int, events_dir: str | Path | None = N
     src = "read_parquet([" + ", ".join(f"'{p.as_posix()}'" for p in parts) + "])"
     con = duckdb.connect()
     con.execute("SET enable_progress_bar = false")
-    con.execute(f"CREATE TEMP TABLE ev AS SELECT * FROM {src} WHERE hero_id = {int(hero_id)}")
+    badge = f" AND badge_level >= {int(min_badge)}" if min_badge is not None else ""
+    con.execute(f"CREATE TEMP TABLE ev AS SELECT * FROM {src} "
+                f"WHERE hero_id = {int(hero_id)}{badge}")
     events = con.execute("SELECT * FROM ev").df()
     match_events = con.execute(
         f"SELECT {', '.join(ENEMY_COLUMNS)} FROM {src} "

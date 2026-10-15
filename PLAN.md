@@ -219,6 +219,17 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-15** (Will): **the population is Ranked matches with average badge Oracle 1 or
+  higher** (`badge_level >= 49` on the linear scale `6 * tier + sub`; Oracle is tier 8). This
+  is the match's average badge, so the whole lobby is Oracle-level. It keeps 26% of matches
+  in 09-16 (45,436; Haze 30,732) and 29% in 09-29 (60,110; Haze 39,682). It is about 3.5 times
+  cheaper to compute, with SEs about 1.9 times wider. Player history is still built from all
+  of a player's Ranked matches, at any rank. A population change is a design change, so §4.1
+  to 4.4, synth and the calibration (2026-10-15 entry below) are rerun on Oracle+ before any
+  confirm. The all-ranks results stay in `results/hero_<id>/patch_*/`, and Oracle+ results go
+  in `.../patch_*/pop_oracle_plus/`. The all-ranks confirm was stopped after 3 LightGBM frames
+  and is not reported. Arm selection is unchanged (at least 2% share and 2,500 buys), so some
+  arms drop out.
 - **2026-10-15** (Will chose option 1 of `docs/HANDOFF.md` §0, "calibrate and continue"):
   §4.1 fails after the history covariates, and the next-match control fails too. Will
   accepts calibration in place of a pass. The shuffle and semi-synthetic nulls are within
