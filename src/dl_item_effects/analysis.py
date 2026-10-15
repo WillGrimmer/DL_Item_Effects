@@ -191,7 +191,7 @@ def nc_player_semisynthetic(df: pd.DataFrame, rows: np.ndarray, learner: str = "
     the shuffle this catches bias from the nuisance models' errors."""
     from sklearn.model_selection import GroupKFold
 
-    from .estimate.aipw import make_learner
+    from .estimate.aipw import fit_outcome
 
     r = np.asarray(rows, dtype=bool) & df[outcome].notna().to_numpy()
     cols = [c for c in covariate_columns(df) if c not in drop]
@@ -200,8 +200,8 @@ def nc_player_semisynthetic(df: pd.DataFrame, rows: np.ndarray, learner: str = "
     y = sub[outcome].to_numpy(dtype=int)
     p = np.zeros(len(sub))
     for fold, (tr, te) in enumerate(GroupKFold(n_splits=5).split(X, y, sub["match_id"])):
-        m = make_learner(learner, seed + 1000 + fold)
-        m.fit(X.iloc[tr], y[tr])
+        m = fit_outcome(learner, seed + 1000 + fold, X.iloc[tr], y[tr],
+                        sub["match_id"].to_numpy()[tr], n_jobs=-1)
         p[te] = m.predict_proba(X.iloc[te])[:, 1]
     key = (sub["match_id"].astype("int64") * 10**10 + sub["account_id"].astype("int64")).to_numpy()
     pm = pd.Series(p).groupby(key).mean()

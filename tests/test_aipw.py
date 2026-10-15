@@ -131,3 +131,15 @@ def test_arm_missing_from_a_fold_counts_as_trimmed():
         f = fit_multiarm(X, A, Y, elig, g, learner="logistic")
     assert f.fold_absent and any("missing from a training fold" in str(x.message) for x in w)
     assert f.trim_share[2] > 0.5
+
+
+def test_lgbm_outcome_models_stop_early_and_recover_truth():
+    from dl_item_effects.estimate.aipw import fit_outcome
+    X, A, Y, elig, g, _ = simulate(seed=11)
+    noise = np.random.default_rng(0).integers(0, 2, len(Y))
+    m = fit_outcome("lgbm", 0, X, noise, g)
+    assert m.best_iteration_ < 200          # nothing to learn: stops long before 1000
+    f = fit_multiarm(X, A, Y, elig, g, learner="lgbm")
+    for k, j in [(0, 1), (2, 1)]:
+        r = pairwise(f, k, j)
+        assert r["ci_lo"] <= TRUE[k] - TRUE[j] <= r["ci_hi"], r

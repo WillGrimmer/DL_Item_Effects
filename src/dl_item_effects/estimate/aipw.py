@@ -21,7 +21,9 @@ actually bought, averaged over supported rows that bought something else (PLAN.m
 """
 from __future__ import annotations
 
+import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -31,8 +33,45 @@ import pandas as pd
 # buys X later in the match.
 CROSSOVER_LABELS = ((0.25, "choice"), (0.50, "mixed"), (1.01, "order"))
 
+# Fits run in parallel threads (LightGBM and BLAS release the GIL), each with a share of the
+# cores: on 16 cores, 4 fits x 4 threads ran 8 arm models 2.7x faster than one at a time on
+# 16 threads, because a single small fit scales badly across threads. DL_FIT_WORKERS
+# overrides the worker count.
+FIT_WORKERS = int(os.environ.get("DL_FIT_WORKERS", 4))
+FIT_THREADS = max(1, (os.cpu_count() or 4) // FIT_WORKERS)
 
-def make_learner(kind: str, seed: int, regression: bool = False):
+# LightGBM outcome models stop early on a held-out 10% of the training matches (patience 50,
+# at most 1000 trees). With a fixed 400 trees they overfit: on Haze's dev set the held-out
+# log-loss for the previous-match outcome was 0.715 against 0.693 for a constant, and 0.691
+# with early stopping (PLAN.md §8, 2026-10-14). Propensities keep 400 trees: early stopping
+# did not improve them.
+ES_MAX_TREES, ES_PATIENCE, ES_VALID_SHARE, ES_MIN_ROWS = 1000, 50, 0.10, 2000
+
+
+def _parallel(fn, tasks, workers: int = FIT_WORKERS) -> list:
+    if workers <= 1 or len(tasks) <= 1:
+        return [fn(t) for t in tasks]
+    with ThreadPoolExecutor(min(workers, len(tasks))) as ex:
+        return list(ex.map(fn, tasks))
+
+
+def fit_outcome(kind: str, seed: int, X: pd.DataFrame, y: np.ndarray, groups: np.ndarray,
+                regression: bool = False, n_jobs: int = FIT_THREADS):
+    """Fit an outcome model; LightGBM stops early on held-out training matches."""
+    if kind != "lgbm" or len(y) < ES_MIN_ROWS:
+        return make_learner(kind, seed, regression, n_jobs=n_jobs).fit(X, y)
+    import lightgbm as lgb
+    um = np.unique(groups)
+    val = np.isin(groups, um[np.random.default_rng(seed).random(len(um)) < ES_VALID_SHARE])
+    if not regression and (np.unique(y[val]).size < 2 or np.unique(y[~val]).size < 2):
+        return make_learner(kind, seed, regression, n_jobs=n_jobs).fit(X, y)
+    m = make_learner(kind, seed, regression, n_jobs=n_jobs, n_estimators=ES_MAX_TREES)
+    return m.fit(X[~val], y[~val], eval_set=[(X[val], y[val])],
+                 callbacks=[lgb.early_stopping(ES_PATIENCE, verbose=False)])
+
+
+def make_learner(kind: str, seed: int, regression: bool = False, n_jobs: int = -1,
+                 n_estimators: int = 400):
     """Classifier for propensities (multiclass) and binary outcomes, or a regressor for
     continuous outcomes (the in-game negative controls). Missing values are median-imputed
     with indicators on the logistic/linear path; LightGBM handles them natively and picks
@@ -49,9 +88,9 @@ def make_learner(kind: str, seed: int, regression: bool = False):
         import lightgbm as lgb
         cls = lgb.LGBMRegressor if regression else lgb.LGBMClassifier
         return cls(
-            n_estimators=400, learning_rate=0.05, num_leaves=31, min_child_samples=100,
+            n_estimators=n_estimators, learning_rate=0.05, num_leaves=31, min_child_samples=100,
             subsample=0.8, subsample_freq=1, colsample_bytree=0.8, reg_lambda=1.0,
-            n_jobs=-1, random_state=seed, verbosity=-1)
+            n_jobs=n_jobs, random_state=seed, verbosity=-1)
     raise ValueError(f"unknown learner {kind!r}")
 
 
@@ -87,11 +126,16 @@ def fit_propensity(X: pd.DataFrame, A: np.ndarray, elig: np.ndarray, groups: np.
     elig = np.asarray(elig, dtype=bool)
     n, K = elig.shape
     e = np.zeros((n, K))
-    for fold, (tr, te) in enumerate(GroupKFold(n_splits=n_splits).split(X, A, groups)):
-        prop = make_learner(learner, seed + fold)
-        prop.fit(X.iloc[tr], A[tr])
-        p = prop.predict_proba(X.iloc[te])
-        for col, k in enumerate(prop.classes_):
+    folds = list(GroupKFold(n_splits=n_splits).split(X, A, groups))
+    threads = max(1, (os.cpu_count() or 4) // min(FIT_WORKERS, len(folds)))
+
+    def one(f):
+        fold, (tr, te) = f
+        prop = make_learner(learner, seed + fold, n_jobs=threads).fit(X.iloc[tr], A[tr])
+        return te, prop.classes_, prop.predict_proba(X.iloc[te])
+
+    for te, classes, p in _parallel(one, list(enumerate(folds))):
+        for col, k in enumerate(classes):
             e[te, int(k)] = p[:, col]
     e = np.where(elig, e, 0.0)
     return e / np.maximum(e.sum(1, keepdims=True), 1e-12)
@@ -117,6 +161,7 @@ def fit_multiarm(X: pd.DataFrame, A: np.ndarray, Y: np.ndarray, elig: np.ndarray
     e = (fit_propensity(X, A, elig, groups, learner, n_splits, seed) if e_hat is None
          else np.asarray(e_hat, dtype=float).copy())
 
+    tasks = []
     for fold, (tr, te) in enumerate(GroupKFold(n_splits=n_splits).split(X, A, groups)):
         for k in range(K):
             tk = tr[A[tr] == k]
@@ -127,10 +172,17 @@ def fit_multiarm(X: pd.DataFrame, A: np.ndarray, Y: np.ndarray, elig: np.ndarray
             if yk.min() == yk.max():
                 mu[te, k] = yk[0]
                 continue
-            m = make_learner(learner, seed + 100 * fold + k, regression=continuous)
-            m.fit(X.iloc[tk], yk)
-            mu[te, k] = (m.predict(X.iloc[te]) if continuous
-                         else m.predict_proba(X.iloc[te])[:, 1])
+            tasks.append((fold, k, tk, te))
+
+    def one(t):
+        fold, k, tk, te = t
+        m = fit_outcome(learner, seed + 100 * fold + k, X.iloc[tk], Y[tk], groups[tk],
+                        regression=continuous)
+        return k, te, (m.predict(X.iloc[te]) if continuous
+                       else m.predict_proba(X.iloc[te])[:, 1])
+
+    for k, te, pred in _parallel(one, tasks):
+        mu[te, k] = pred
 
     # Restrict the generalized propensity to buyable arms and renormalize (idempotent).
     e = np.where(elig, e, 0.0)

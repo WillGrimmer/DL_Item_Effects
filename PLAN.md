@@ -219,6 +219,16 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-14**: LightGBM outcome models stop early (held-out 10% of training matches,
+  patience 50, at most 1000 trees); propensities keep a fixed 400 trees. Tuned on Haze
+  09-16's dev set at 800 (grouped 5-fold, the three largest arms), on held-out log-loss only:
+  previous-match outcome 0.715 with 400 trees, 0.691 with early stopping, 0.693 for a
+  constant; next match 0.722, 0.694, 0.693; win 0.674, 0.664, 0.692. Early stopping ends at 1
+  to 190 trees. The fixed 400 trees fit noise, which inflates variance and can bias AIPW
+  through the product of nuisance errors. Propensities: 1.0205 with 400 trees and 1.0219 with
+  early stopping, so unchanged. Fits now run 4 at a time with 4 threads each (8 arm fits:
+  8 s to 3 s). Decided before any falsification result under this learner; the two 09-16
+  frames already rerun with history covariates used 400 trees and are discarded.
 - **2026-10-14** (Will accepted the recommendation in `docs/HANDOFF.md` §7): §4.1 and §4.4 are
   applied once per hero and window, pooled over prices, as their wording says (per frame they
   fail by chance in 95% and 55% to 76% of windows). Decided after seeing Haze's falsification
