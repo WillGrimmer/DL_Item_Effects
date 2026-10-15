@@ -4,6 +4,40 @@ Written 2026-10-14 for an agent starting with a fresh context. Read this first, 
 [`PLAN.md`](../PLAN.md). Everything below was checked against the repo and data on disk at the
 time of writing.
 
+## 0b. Update, 2026-10-15 ~18:00: Oracle+ confirm half done, PAUSED by Will (read first)
+
+- Will chose the borrowed all-ranks calibration (PLAN §8; μ −0.238pp, τ 0.261pp, se 0.072pp;
+  `results/hero_13/calibration_oracle_plus.json`). Frozen at `b797984`.
+- **The LightGBM confirm is done for both windows.** Tables are in
+  `patch_*/pop_oracle_plus/confirm_lgbm_<price>_{effects,pairwise,curves}.csv`; combined in
+  `results/hero_13/haze_oracle_plus_lgbm_effects.csv` (effects in pp).
+  - Of 62 item × price rows, none has q < 0.05 and 2 have q < 0.10 (09-16 · 1600: Active
+    Reload −4.6pp, Bullet Lifesteal −3.5pp).
+  - Calibrated SE median 1.33pp.
+  - Across the 30 items present in both windows, the calibrated effects correlate at 0.74,
+    so there is a real signal that each window is too small to prove alone.
+  - Consistent in both windows:
+    - 800: Extra Spirit +, Extra Regen −, Sprint Boots −.
+    - 1600: Slowing Hex −, Bullet Lifesteal −, Active Reload −, Battle Vest +, Bullet
+      Resist Shredder +.
+    - 6400: Ricochet +.
+  - At 3200 and 6400, empirical Bayes shrinks every arm to the same value: the items are
+    indistinguishable.
+- **The logistic confirm was paused at Will's request** before any frame finished (no
+  logistic files were written). To resume (about 30 to 40 min), one job at a time:
+
+```bash
+python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage confirm --learner logistic
+python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage confirm --learner logistic
+python -m dl_item_effects.phase3 --hero 13 --patch 09-16-2026 --stage compare
+python -m dl_item_effects.phase3 --hero 13 --patch 09-29-2026 --stage compare
+```
+
+  `--population oracle_plus` is the default.
+- **Suggested next step after that:** pool the two windows for items the 09-29 patch did not
+  change (PLAN §3.7 allows it). The 0.74 cross-window agreement suggests it roughly doubles
+  precision, which is the most likely way to get items past q < 0.05.
+
 ## 0a. Update, 2026-10-15 16:45: population is now Oracle+; one decision before confirm (read first)
 
 Since §0 below:
