@@ -115,3 +115,13 @@ def test_calibration_shifts_headline_and_only_widens_pairwise(tmp_path):
     assert np.allclose(s, np.sqrt(0.004 ** 2 + 0.003 ** 2 + 0.001 ** 2))
     e, s = analysis.calibrate([0.01], [0.004], cal, pairwise=True)
     assert np.allclose(e, [0.01]) and np.allclose(s, np.sqrt(0.004 ** 2 + 2 * 0.003 ** 2))
+
+
+def test_pooled_calibration_over_two_windows(frame):
+    p = analysis.nc_player(frame, np.ones(len(frame), bool))
+    t, s = p["table"].assign(price=3200), p["scores"].assign(price=3200)
+    two = analysis.pooled_calibration([t, t], [s, s.assign(match_id=s["match_id"] + 10**9)],
+                                      reps=200)
+    one = analysis.pooled_nc(t)
+    assert two["n_arms"] == 2 * len(t)
+    assert two["mu"] == pytest.approx(one["mu"]) and two["mu_se"] > 0

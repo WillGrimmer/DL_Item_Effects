@@ -20,6 +20,10 @@ Stages (results under data/processed/results/hero_<id>/patch_<patch>/):
   and pools it like ``falsify``.
 * ``synth``: §4.1 (and the next-match diagnostic) on a semi-synthetic outcome drawn from
   the covariates alone: true effect zero, realistic covariate signal. Pooled like ``falsify``.
+* ``calibrate``: build ``results/hero_<id>/calibration_<population>.json`` from another
+  population's next-match control pooled over several windows (``--cal-source``,
+  ``--cal-patches``). Confirm uses this file when it exists, else the window's own
+  ``pooled_falsify_lgbm.json`` (PLAN.md §8, 2026-10-15).
 * ``pool``: recompute the pooled rules and bootstrap from the saved falsify/shuffle files.
 * ``compare``: after ``confirm`` has run with both learners, the agreement table (PLAN.md §3.3:
   a result counts only if logistic and LightGBM agree on sign and significance at q < 0.05).
@@ -72,7 +76,29 @@ def _names(decoder, ids) -> list[str]:
     return [decoder.name(int(i)) for i in ids]
 
 
-def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) -> dict:
+def hero_dir(hero_id: int) -> Path:
+    return config.PROCESSED_DIR / "results" / f"hero_{hero_id}"
+
+
+def build_calibration(hero_id: int, population: str, source: str, patches: list[str],
+                      learner: str = "lgbm", prices=PRICES) -> dict:
+    tabs, scores = [], []
+    for patch in patches:
+        d = results_dir(hero_id, patch, source)
+        f = [(p, d / f"falsify_{learner}_{p}_nc_next") for p in prices]
+        tabs.append(pd.concat([pd.read_csv(x.with_suffix(".csv")).assign(price=p) for p, x in f],
+                              ignore_index=True))
+        scores.append(pd.concat([pd.read_parquet(f"{x}_scores.parquet").assign(price=p)
+                                 for p, x in f], ignore_index=True))
+    cal = dict(source="nc_next", learner=learner, source_population=source, patches=patches,
+               applies_to=population, **analysis.pooled_calibration(tabs, scores))
+    (hero_dir(hero_id) / f"calibration_{population}.json").write_text(
+        json.dumps(cal, indent=1, default=float))
+    return cal
+
+
+def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder,
+              cal: dict | None = None) -> dict:
     price = df.attrs["price"]
     dev = analysis.dev_rows(df)
     allr = np.ones(len(df), bool)
@@ -137,7 +163,7 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
                        nc_next_synth=dict(mu=nx["mu"], tau=nx["tau"], p_sd=nx["p_sd"]))
 
     elif stage == "confirm":
-        cal = analysis.load_calibration(out, "lgbm")
+        cal = cal or analysis.load_calibration(out, "lgbm")
         conf = ~dev
         fit = analysis.fit_rows(df, conf, learner, e_hat=e_all[conf])
         tab = effect_table(fit, analysis.next_buy(df, conf))
@@ -236,13 +262,20 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--hero", type=int, required=True)
     ap.add_argument("--patch", required=True)
     ap.add_argument("--stage", choices=("dev", "falsify", "shuffle", "synth", "confirm", "compare",
-                                        "pool"),
+                                        "pool", "calibrate"),
                     required=True)
     ap.add_argument("--learner", choices=("logistic", "lgbm"), default="logistic")
     ap.add_argument("--prices", type=int, nargs="*", default=list(PRICES))
     ap.add_argument("--population", choices=tuple(POPULATIONS), default="oracle_plus",
                     help="match population (PLAN.md §8, 2026-10-15: Oracle 1 and up)")
+    ap.add_argument("--cal-source", choices=tuple(POPULATIONS), default="all")
+    ap.add_argument("--cal-patches", nargs="*", default=["09-16-2026", "09-29-2026"])
     a = ap.parse_args(argv)
+
+    if a.stage == "calibrate":
+        print(json.dumps(build_calibration(a.hero, a.population, a.cal_source, a.cal_patches),
+                         indent=1, default=float))
+        return
 
     out = results_dir(a.hero, a.patch, a.population)
     if a.stage == "pool":
@@ -259,11 +292,17 @@ def main(argv: list[str] | None = None) -> None:
     w = load_hero_window(a.patch, a.hero, min_badge=POPULATIONS[a.population])
     print(f"loaded hero {a.hero} {a.patch} ({a.population}): {len(w.events):,} purchases "
           f"({time.monotonic() - t0:.0f} s)", flush=True)
+    cal = None
+    if a.stage == "confirm":
+        f = hero_dir(a.hero) / f"calibration_{a.population}.json"
+        cal = json.loads(f.read_text()) if f.exists() else None
+        print(f"calibration: {cal if cal else 'per window, from pooled_falsify_lgbm.json'}",
+              flush=True)
     summaries = []
     for price in a.prices:
         t1 = time.monotonic()
         df = build_frame(w, price, decoder)
-        s = run_price(df, a.stage, a.learner, out, decoder)
+        s = run_price(df, a.stage, a.learner, out, decoder, cal=cal)
         s["frame_s"] = round(time.monotonic() - t1 - s["wall_s"])
         summaries.append(s)
         print(json.dumps(s, default=float), flush=True)

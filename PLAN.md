@@ -219,6 +219,21 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-15** (Will, option 1 of `docs/HANDOFF.md` §0a): **Oracle+ is calibrated with the
+  all-ranks next-match control, pooled over both windows** (80 arms, DerSimonian-Laird μ and
+  τ, match-clustered bootstrap se(μ)). It replaces, for Oracle+, the per-window rule of the
+  calibration entry below. The arithmetic is unchanged: headline shift −μ, widen by τ and
+  se(μ); pairwise widen by √2·τ.
+  - **Why:** Oracle+'s own estimates are about 2.5 times noisier per window. The per-window
+    rule would shift 09-16 by about 0 and 09-29 by +0.36pp, a gap that is mostly noise.
+    Oracle+'s pooled next match (−0.18 ± 0.16pp) is consistent with the all-ranks one
+    (about −0.24 ± 0.07pp), so there is no evidence the bias differs by rank. The pooled
+    all-ranks value is the most precise.
+  - **Assumption, stated on every table:** the bias measured on all ranks applies to
+    Oracle+.
+  - **Values (Haze):** μ −0.238pp, τ 0.261pp, se(μ) 0.072pp, over 80 arms.
+  - **Where it lives:** `results/hero_<id>/calibration_oracle_plus.json`, built by
+    `--stage calibrate`. The design is frozen from the commit that adds this.
 - **2026-10-15** (Will): **the population is Ranked matches with average badge Oracle 1 or
   higher** (`badge_level >= 49` on the linear scale `6 * tier + sub`; Oracle is tier 8). This
   is the match's average badge, so the whole lobby is Oracle-level. It keeps 26% of matches

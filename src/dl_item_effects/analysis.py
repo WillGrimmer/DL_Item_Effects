@@ -374,6 +374,22 @@ def load_calibration(out, learner: str = "lgbm") -> dict:
                 mu_se=float(boot["match_id"]["mu_se"]))
 
 
+def pooled_calibration(tables: list[pd.DataFrame], scores: list[pd.DataFrame],
+                       reps: int = 1000, seed: int = 0) -> dict:
+    """Systematic error from a control pooled over several windows (PLAN.md §8, 2026-10-15,
+    Oracle+): one DerSimonian-Laird mean and tau over every arm of every window, with a
+    match-clustered bootstrap se(mu). Each window's tables and scores carry ``price``; arms
+    are kept apart across windows by tagging the price with the window's index."""
+    t = pd.concat([x.assign(price=x["price"] * 10 + i) for i, x in enumerate(tables)],
+                  ignore_index=True)
+    s = pd.concat([x.assign(price=x["price"] * 10 + i) for i, x in enumerate(scores)],
+                  ignore_index=True)
+    r = pooled_nc(t)
+    b = bootstrap_nc(s, t, cluster="match_id", reps=reps, seed=seed)
+    return dict(mu=r["mu"], tau=r["tau"], mu_se=b["mu_se"], n_arms=r["n_arms"],
+                fe_mean=r["fe_mean"])
+
+
 def calibrate(effect, se, cal: dict, pairwise: bool = False):
     """Empirical calibration, shift and widen (Schuemie et al. 2018). A headline effect is
     shifted by -mu and its SE widened by tau and se(mu); a pairwise contrast is not shifted (a
