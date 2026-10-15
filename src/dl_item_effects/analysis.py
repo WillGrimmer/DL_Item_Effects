@@ -359,5 +359,30 @@ def pooled_split_half(z: pd.DataFrame) -> dict:
                 passed=share <= THRESHOLDS["split_half_share"])
 
 
+# -- calibration --------------------------------------------------------------------------
+
+def load_calibration(out, learner: str = "lgbm") -> dict:
+    """Systematic error N(mu, tau^2) for a hero and window (PLAN.md §8, 2026-10-15): the pooled
+    next-match control from ``pooled_falsify_<learner>.json``, the only control fitted with
+    the production covariates. ``mu_se`` is its match-clustered bootstrap SE."""
+    import json
+    from pathlib import Path
+
+    r = json.loads((Path(out) / f"pooled_falsify_{learner}.json").read_text())["nc_next"]
+    boot = {b["cluster"]: b for b in r["bootstrap"]}
+    return dict(source="nc_next", learner=learner, mu=float(r["mu"]), tau=float(r["tau"]),
+                mu_se=float(boot["match_id"]["mu_se"]))
+
+
+def calibrate(effect, se, cal: dict, pairwise: bool = False):
+    """Empirical calibration, shift and widen (Schuemie et al. 2018). A headline effect is
+    shifted by -mu and its SE widened by tau and se(mu); a pairwise contrast is not shifted (a
+    common bias cancels) and is widened by sqrt(2) tau."""
+    effect, se = np.asarray(effect, dtype=float), np.asarray(se, dtype=float)
+    if pairwise:
+        return effect, np.sqrt(se ** 2 + 2 * cal["tau"] ** 2)
+    return effect - cal["mu"], np.sqrt(se ** 2 + cal["tau"] ** 2 + cal["mu_se"] ** 2)
+
+
 def dev_rows(df: pd.DataFrame) -> np.ndarray:
     return is_dev(df["match_id"].to_numpy())

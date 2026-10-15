@@ -101,3 +101,17 @@ def test_next_match_diagnostic_and_pooled_split_half(frame):
 def test_semisynthetic_null_is_near_zero(frame):
     r = analysis.nc_player_semisynthetic(frame, np.ones(len(frame), bool), seed=4)
     assert abs(r["mu"]) < 0.01 and r["p_sd"] >= 0
+
+
+def test_calibration_shifts_headline_and_only_widens_pairwise(tmp_path):
+    import json
+    (tmp_path / "pooled_falsify_lgbm.json").write_text(json.dumps(dict(nc_next=dict(
+        mu=-0.0025, tau=0.003, bootstrap=[dict(cluster="match_id", mu_se=0.001),
+                                          dict(cluster="account_id", mu_se=0.002)]))))
+    cal = analysis.load_calibration(tmp_path)
+    assert cal["mu_se"] == 0.001 and cal["source"] == "nc_next"
+    e, s = analysis.calibrate([0.01, -0.01], [0.004, 0.004], cal)
+    assert np.allclose(e, [0.0125, -0.0075])
+    assert np.allclose(s, np.sqrt(0.004 ** 2 + 0.003 ** 2 + 0.001 ** 2))
+    e, s = analysis.calibrate([0.01], [0.004], cal, pairwise=True)
+    assert np.allclose(e, [0.01]) and np.allclose(s, np.sqrt(0.004 ** 2 + 2 * 0.003 ** 2))

@@ -219,6 +219,33 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-15** (Will chose option 1 of `docs/HANDOFF.md` §0, "calibrate and continue"):
+  §4.1 fails after the history covariates, and the next-match control fails too. Will
+  accepts calibration in place of a pass. The shuffle and semi-synthetic nulls are within
+  1.5 SEs of zero, so the estimator is sound and the shift is residual confounding.
+  **Empirical calibration, shift and widen** (Schuemie et al. 2018): systematic error is
+  modelled as N(μ, τ²) per hero and window. The source is the **next-match control**, the
+  only one fitted with the exact production covariates (the previous-match control must
+  drop `prev_won` and `win_streak`). μ and τ are its pooled DerSimonian-Laird mean and
+  between-arm SD, and se(μ) is its match-clustered bootstrap SE. Haze: 09-16 μ −0.217pp,
+  τ 0.291pp, se(μ) 0.102pp; 09-29 μ −0.257pp, τ 0.256pp, se(μ) 0.100pp.
+  - **Headline per arm (and its curve over game time):** effect − μ, with
+    SE √(se² + τ² + se(μ)²).
+  - **Pairwise contrasts:** not shifted (a common shift cancels); SE √(se² + 2τ²).
+  - **Ranking and testing:** p-values, BH q-values and empirical-Bayes shrinkage use the
+    calibrated values. Raw values stay in the tables beside them.
+
+  Why shift and not only widen: the bias has the same sign in all four controls (two
+  outcomes × two windows) and in 7 of 8 frames, so widening alone would leave every
+  effect knowingly biased by about 0.25pp. Why widen too: per arm, the bias is not
+  predictable (the previous- and next-match per-arm effects correlate at r 0.06), so a
+  single shift is right on average but not per arm.
+
+  Logistic confirm uses the LightGBM calibration: the controls were run with LightGBM
+  only, and logistic is the agreement check. The next match carries a small post-treatment
+  path (item → this match's result → the next one), of the order of a 1pp effect times the
+  dependence between consecutive results, so negligible. The design is frozen from the
+  commit that adds this entry and the calibration code; the confirm stage runs on it once.
 - **2026-10-14**: LightGBM outcome models stop early (held-out 10% of training matches,
   patience 50, at most 1000 trees); propensities keep a fixed 400 trees. Tuned on Haze
   09-16's dev set at 800 (grouped 5-fold, the three largest arms), on held-out log-loss only:

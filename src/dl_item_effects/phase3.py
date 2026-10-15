@@ -11,7 +11,10 @@ Stages (results under data/processed/results/hero_<id>/patch_<patch>/):
   window-level pooled rules (``pooled_falsify_<learner>.json``).
 * ``confirm``: the reported tables on the other 80%, run once the design is frozen: headline
   per arm with crossover label, pairwise matrix, curves over game time, OVB bounds benchmarked
-  against the skill covariates, and BH q-values.
+  against the skill covariates, and BH q-values. Every effect is also given calibrated
+  (PLAN.md §8, 2026-10-15: shifted by the next-match control's mean, widened by its
+  between-arm SD; ``*_cal`` columns), and p, q and shrinkage use the calibrated values. It
+  needs ``pooled_falsify_lgbm.json`` and refuses to run without it.
 * ``shuffle``: §4.1 on a shuffled previous-match result (true effect zero), to tell an
   estimator artifact from real confounding. Writes ``shuffle_<learner>_<price>_nc_player.csv``
   and pools it like ``falsify``.
@@ -132,11 +135,14 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
                        nc_next_synth=dict(mu=nx["mu"], tau=nx["tau"], p_sd=nx["p_sd"]))
 
     elif stage == "confirm":
+        cal = analysis.load_calibration(out, "lgbm")
         conf = ~dev
         fit = analysis.fit_rows(df, conf, learner, e_hat=e_all[conf])
         tab = effect_table(fit, analysis.next_buy(df, conf))
-        tab["p"] = two_sided_p(tab["effect"], tab["se"])
-        eb = empirical_bayes(tab["effect"].to_numpy(), tab["se"].to_numpy())
+        tab["p_raw"] = two_sided_p(tab["effect"], tab["se"])
+        _add_cal(tab, cal)
+        tab["p"] = two_sided_p(tab["effect_cal"], tab["se_cal"])
+        eb = empirical_bayes(tab["effect_cal"].to_numpy(), tab["se_cal"].to_numpy())
         tab["eb_effect"], tab["eb_sd"] = eb["post_mean"], eb["post_sd"]
         e_ns = cached_propensities(df, out, learner, "h_noskill",
                                    drop=tuple(analysis.SKILL_COLUMNS))
@@ -155,15 +161,24 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder) ->
         pw = pairwise_table(fit)
         pw.insert(1, "item", _names(decoder, pw["arm"]))
         pw.insert(3, "vs_item", _names(decoder, pw["vs"]))
+        _add_cal(pw, cal, pairwise=True)
         pw.to_csv(out / f"{tag}_pairwise.csv", index=False)
         t = df.loc[conf, "game_time_s"].to_numpy()
-        curves = [dr_curve(fit, k, t, CURVE_GRID_S).assign(arm=fit.arms[k])
-                  for k in range(len(fit.arms))]
-        pd.concat(curves).to_csv(out / f"{tag}_curves.csv", index=False)
-        summary.update(confirm_rows=int(conf.sum()), fold_absent=len(fit.fold_absent))
+        curves = pd.concat([dr_curve(fit, k, t, CURVE_GRID_S).assign(arm=fit.arms[k])
+                            for k in range(len(fit.arms))])
+        _add_cal(curves, cal)
+        curves.to_csv(out / f"{tag}_curves.csv", index=False)
+        summary.update(confirm_rows=int(conf.sum()), fold_absent=len(fit.fold_absent),
+                       calibration=cal)
 
     summary["wall_s"] = round(time.monotonic() - t0)
     return summary
+
+
+def _add_cal(t: pd.DataFrame, cal: dict, pairwise: bool = False) -> None:
+    t["effect_cal"], t["se_cal"] = analysis.calibrate(t["effect"], t["se"], cal, pairwise)
+    t["ci_lo_cal"] = t["effect_cal"] - 1.96 * t["se_cal"]
+    t["ci_hi_cal"] = t["effect_cal"] + 1.96 * t["se_cal"]
 
 
 def _save_nc(p: dict, out: Path, tag: str, name: str, decoder) -> None:
@@ -207,7 +222,7 @@ def compare(out: Path, prices=PRICES, alpha: float = 0.05) -> pd.DataFrame:
         rows.append(m)
     m = pd.concat(rows, ignore_index=True)
     sig_a, sig_b = m["q_logit"] < alpha, m["q_lgbm"] < alpha
-    same_sign = np.sign(m["effect_logit"]) == np.sign(m["effect_lgbm"])
+    same_sign = np.sign(m["effect_cal_logit"]) == np.sign(m["effect_cal_lgbm"])
     m["agree"] = (sig_a & sig_b & same_sign) | (~sig_a & ~sig_b)
     m["counts"] = sig_a & sig_b & same_sign
     m.to_csv(out / "confirm_agreement.csv", index=False)
@@ -249,7 +264,8 @@ def main(argv: list[str] | None = None) -> None:
         summaries.append(s)
         print(json.dumps(s, default=float), flush=True)
     if a.stage == "confirm":
-        # Benjamini-Hochberg across the whole family for this hero and patch (every price)
+        # Benjamini-Hochberg across the whole family for this hero and patch (every price), on
+        # the calibrated p-values
         files = [out / f"confirm_{a.learner}_{p}_effects.csv" for p in a.prices]
         tabs = [pd.read_csv(f) for f in files]
         q = benjamini_hochberg(np.concatenate([t["p"].to_numpy() for t in tabs]))
