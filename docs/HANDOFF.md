@@ -4,6 +4,52 @@ Written 2026-10-14 for an agent starting with a fresh context. Read this first, 
 [`PLAN.md`](../PLAN.md). Everything below was checked against the repo and data on disk at the
 time of writing.
 
+## 0a. Update, 2026-10-15 16:45: population is now Oracle+; one decision before confirm (read first)
+
+Since §0 below:
+- Will chose option 1 (calibrate), logged in PLAN §8 and frozen at `e2f33a0`. The all-ranks
+  confirm was then stopped after 3 LightGBM frames and is not reported.
+- **Will changed the population to Ranked matches with average badge Oracle 1 or higher**
+  (PLAN §8, commit `80b8585`). Use `--population oracle_plus`, the default. Results are in
+  `results/hero_13/patch_*/pop_oracle_plus/`; the log is
+  `results/hero_13/oracle_plus_2026-10-15.log`. Haze has 30,732 and 39,682 matches; 31 arms
+  per window (42 and 38 at all ranks).
+- Falsify plus synth for both windows took 23 min.
+
+**Oracle+ checks (Haze, LightGBM).** Pooled μ in pp ± bootstrap SE:
+
+| Window | §4.1 previous match | Next match (production) | Synth previous (truth 0) | Synth next (truth 0) | §4.4 pooled |
+|---|---|---|---|---|---|
+| 09-16 | −0.56 ± 0.25 (τ 0.50) ✗ | +0.03 ± 0.23 (τ 0.00) | −0.01 ± 0.24 | +0.34 ± 0.22 | 0.0% ✓ |
+| 09-29 | −0.17 ± 0.21 (τ 0.26) ✓ | −0.36 ± 0.21 (τ 0.52) | −0.02 ± 0.19 | −0.22 ± 0.20 | 6.5% ✓ |
+
+- §4.2 passes in 7 of 8 frames. The exception is 09-29 · 3200, where deaths for 1 of only 5
+  arms exceed 0.1 SD (the mean is 0.049, under 0.05), the same coarse-per-frame issue §4.4
+  had.
+- §4.3 coverage is 0.925 to 0.975 ✓.
+- The synth z SDs are 0.87 to 1.18, so the estimator is still sound. The SEs are about twice
+  the all-ranks ones, and the §4.1 rule now fails by chance 55% to 65% of the time.
+- **The bias looks the same as at all ranks.** Averaged over the four Oracle+ controls it is
+  about −0.26pp; at all ranks it was −0.25pp. Each Oracle+ number is just about 2.5 times
+  noisier.
+
+**Decision for Will: which calibration to use for Oracle+.** The frozen rule (PLAN §8, per
+window, from the next-match control) gives very different calibrations for the two windows,
+and they are mostly noise:
+- 09-16: shift about 0, widen by 0.23pp.
+- 09-29: shift +0.36pp, widen by about 0.56pp.
+
+The options:
+1. **Borrow the all-ranks next-match calibration, pooled over both windows (recommended):**
+   μ −0.24pp, se 0.07, τ about 0.27. It is about 2.2 times more precise. Oracle+'s own pooled
+   next-match (−0.18 ± 0.16) is consistent with it, so there is no evidence the bias differs
+   by rank. The assumption that the bias is the same at Oracle+ is stated on every table.
+2. **Oracle+ next-match, pooled over both windows:** μ −0.18, se 0.16. Self-contained but
+   noisy, so it widens every interval by more.
+3. **Keep the per-window rule as logged:** the two windows get inconsistent calibrations.
+
+Confirm (Oracle+) is about 6 min for LightGBM and 30 to 40 min for logistic, both windows.
+
 ## 0. Update, 2026-10-15 01:10: §7 decided, rerun done, §4.1 still fails (read this first)
 
 Will accepted §7's recommendation for both questions (PLAN §8 entry of 2026-10-14). Built and
