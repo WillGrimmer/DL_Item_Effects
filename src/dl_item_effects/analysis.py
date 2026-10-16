@@ -325,7 +325,9 @@ def ovb(fit: MultiArmFit, k: int, j: int | None = None, cf_y: float = 0.03,
     sigma2 = float(np.mean((fit.Y[rows] - mu_obs) ** 2))
     nu2 = float(max(np.mean(2 * m_alpha - alpha ** 2), 0.0))
     S = np.sqrt(sigma2 * nu2)
-    bias = S * abs(rho) * np.sqrt(cf_y * cf_d / (1 - cf_d))
+    # cf_d = 1 (a confounder that explains all of the treatment's residual variation) leaves
+    # the bias unbounded; rare extended-tier arms can hit it in the skill benchmark.
+    bias = (S * abs(rho) * np.sqrt(cf_y * cf_d / (1 - cf_d)) if cf_d < 1 else np.inf)
     se = (vs_actual(fit, k) if j is None else pairwise(fit, k, j))["se"]
 
     def rv(target):

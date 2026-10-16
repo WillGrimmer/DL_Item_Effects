@@ -125,3 +125,7 @@ def test_pooled_calibration_over_two_windows(frame):
     one = analysis.pooled_nc(t)
     assert two["n_arms"] == 2 * len(t)
     assert two["mu"] == pytest.approx(one["mu"]) and two["mu_se"] > 0
+
+
+def test_ovb_unbounded_when_confounder_explains_all_treatment(fit):
+    assert analysis.ovb(fit, 0, cf_y=0.03, cf_d=1.0)["bias"] == np.inf
