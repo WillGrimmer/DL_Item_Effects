@@ -4,6 +4,91 @@ Written 2026-10-14 for an agent starting with a fresh context. Read this first, 
 [`PLAN.md`](../PLAN.md). Everything below was checked against the repo and data on disk at the
 time of writing.
 
+## 0c. Update, 2026-10-16 morning: Haze + Billy, two item tiers, overnight run (read first)
+
+**Decisions since §0b (all in PLAN §8):**
+- **Two item tiers** (2026-10-16):
+  - core = the old rule;
+  - extended = 500 to 2,499 buys per hero and window, no share minimum;
+  - BH runs per tier;
+  - `p_better`, `promising` and `replicates` are defined in `summary.py`.
+- Billy (hero 72) gets its own calibration by Haze's rule: all-ranks next-match control on
+  core arms, pooled over both windows. Result: μ −0.099pp, τ 0, se 0.089pp, 87 arms (Haze:
+  −0.238pp).
+- Prices with fewer than 2 arms are skipped, not fatal.
+- An OVB division by zero when cf_d = 1 is fixed (`d17556f`).
+- Haze's old Oracle+ core-only outputs are in `pop_oracle_plus/core_only_2026-10-15/`.
+
+**Overnight run** (log `results/overnight_2026-10-16.log`, commits `807bacb` and `d17556f`):
+- Haze and Billy Oracle+ falsify, Billy all-ranks falsify, calibration, and LightGBM confirm
+  for both heroes are done.
+- The logistic confirm was started as filler. It is slow with the extended arms: Haze 09-16
+  · 800 had not finished after 24 min, so all of it may take hours. When it finishes, the
+  queue runs `compare` and rebuilds the summary.
+
+**Combined table:** `results/haze_billy_oracle_plus.csv`, 235 item rows:
+
+| | 09-16 core | 09-16 extended | 09-29 core | 09-29 extended |
+|---|---|---|---|---|
+| Haze | 31 | 39 | 31 | 39 |
+| Billy | 24 | 23 | 19 | 29 |
+
+- **Significant (q < 0.05 in its tier):** 2, both Haze 09-16 at 1600.
+  - Bullet Resist Shredder +3.6pp (CI +1.2 to +5.9).
+  - Active Reload −5.0pp (CI −7.6 to −2.3).
+- **Promising in both windows, same direction (Haze):**
+  - Better than what players bought instead:
+    - **Frenzy +5.9pp (extended, 6400, about 1,100 buys)**;
+    - Hollow Point +4.7 (3200);
+    - Battle Vest +2.5 (1600);
+    - Ricochet +1.1 (6400).
+  - Worse:
+    - Counterspell −4.9 (extended, 3200);
+    - Extra Stamina −3.9 (extended, 800);
+    - Veil Walker −6.2 (3200);
+    - Sprint Boots −3.3 (800);
+    - Cursed Relic −2.8 (6400);
+    - Extra Regen −2.4 (800);
+    - Slowing Hex −2.3 (1600);
+    - Bullet Lifesteal −2.2 (1600).
+- **Billy:** nothing significant and nothing promising in both windows. Single-window
+  promising: Extra Charge +4.9 and Extended Magazine +7.2 (09-29 · 800); Slowing Hex −3.8,
+  Extra Health −6.1, Battle Vest −3.6 (09-16).
+  - Colossus and Crushing Fists now have estimates (6400, about 1,100 to 1,450 buys) but are
+    indistinguishable from the alternatives: CIs about ±6 to ±8pp, signs flip between
+    windows.
+  - Billy has about 40% of Haze's data, so it needs window pooling or cross-hero pooling to
+    say anything.
+
+**Oracle+ checks with both tiers** (pooled μ ± bootstrap SE, pp):
+
+| | §4.1 all arms | §4.1 core only | next match | §4.3 coverage | §4.4 share |
+|---|---|---|---|---|---|
+| Haze 09-16 (70 arms) | −0.49 ± 0.23 | −0.42 ± 0.23 | +0.07 ± 0.23 | 0.905–0.95 | 4.3% ✓ |
+| Haze 09-29 (70) | +0.00 ± 0.21 | −0.15 ± 0.20 | −0.28 ± 0.20 | 0.94–0.95 | 1.4% ✓ |
+| Billy 09-16 (47) | −0.30 ± 0.34 | −0.28 ± 0.37 | +0.05 ± 0.37 | 0.935–0.995 | 4.3% ✓ |
+| Billy 09-29 (48) | −0.13 ± 0.37 | −0.18 ± 0.39 | −0.32 ± 0.39 | 0.935–0.955 | 6.2% ✓ |
+
+- **§4.2 now fails in most frames (3 of 16 pass), but only because of the extended arms'
+  noise.**
+  - Core arms: 99.5% are within 0.1 SD, mean |d| 0.022, a pass.
+  - Extended arms: their SEs are about 4 times larger (median 0.078 SD), so 24% cross the
+    fixed 0.1 SD line, yet their z SD is 1.05 with 5.8% beyond ±2, which is pure noise.
+  - The rule is an absolute threshold that does not fit noisy arms. **Decision for Will:**
+    keep it as is (core passes), or judge extended arms on a z basis. A few situational
+    items are genuinely imbalanced on recent deaths and souls: Restorative Shot (Haze
+    09-16 · 800, z −3.6) and Warp Stone (z −2.8). They are bought in reaction to the game
+    state.
+- §4.1 and the next match are consistent with each hero's calibration.
+
+**Suggested next steps:**
+1. **Pool the two windows** for items the 09-29 patch did not change (PLAN §3.7). This
+   needs code and a PLAN entry. It is the biggest precision gain, especially for Billy and
+   the extended tier.
+2. **Decide what to do about logistic.** It is too slow with extended arms. Options: run it
+   only on items LightGBM flags, or on the core tier.
+3. **Cross-hero pooling** for the extended tier, once more heroes run.
+
 ## 0b. Update, 2026-10-15 ~18:00: Oracle+ confirm half done, PAUSED by Will (read first)
 
 - Will chose the borrowed all-ranks calibration (PLAN §8; μ −0.238pp, τ 0.261pp, se 0.072pp;
