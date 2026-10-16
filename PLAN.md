@@ -219,6 +219,35 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-16** (Will): **two item tiers.**
+  - **Core:** the original rule, at least 2% of the price's full-price buys and 2,500 buys
+    per hero and window.
+  - **Extended:** every other item with **at least 500** full-price buys per hero and window,
+    no share minimum.
+
+  Why: the project's goal includes recognizing underused items that are good. At Oracle+
+  the core rule kept only 31 of about 155 Haze items and 19 to 24 Billy items (Billy's
+  Colossus and Crushing Fists were out), and an excluded item gets no estimate at all.
+  Selection uses purchase counts only, never outcomes.
+  - **One frame per price holds both tiers**, so the comparison "vs what the player actually
+    bought" now includes extended-item buyers, and core estimates shift a little from the
+    core-only run.
+  - **Benjamini-Hochberg runs separately per tier** (per hero and window, over every price),
+    so the extended items do not raise the bar for core items.
+  - **Extended items are reported as "promising", not "proven"**, unless they pass their own
+    family.
+  - **Definitions in the combined table (`summary.py`), fixed before any extended result:**
+    - `p_better` = Φ(calibrated effect / calibrated SE).
+    - `promising` = not significant, and `p_better` ≥ 0.9 (or ≤ 0.1 for harmful).
+    - `replicates` = same calibrated sign in both windows.
+  - **Falsification:** §4.1 to 4.4 are pooled over all arms, with core-only pooled values
+    reported beside them.
+  - **Calibration:** each hero's comes from its all-ranks next-match control on core arms,
+    pooled over both windows. Haze reuses `calibration_oracle_plus.json`; Billy gets the same
+    rule. Applying it to extended arms assumes their bias is like the core arms'; τ covers
+    per-arm spread.
+  - Haze's Oracle+ core-only outputs move to `pop_oracle_plus/core_only_2026-10-15/` and are
+    superseded.
 - **2026-10-15** (Will, option 1 of `docs/HANDOFF.md` §0a): **Oracle+ is calibrated with the
   all-ranks next-match control, pooled over both windows** (80 arms, DerSimonian-Laird μ and
   τ, match-clustered bootstrap se(μ)). It replaces, for Oracle+, the per-window rule of the

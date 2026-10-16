@@ -161,3 +161,16 @@ def test_arm_table_crossover_and_precision():
     assert t.loc[Y, "n_comparison"] == 2 and t.loc[Y, "cross_by_end"] == 0.5
     assert t.loc[Y, "cross_within"] == 0.5 and t.loc[Y, "crossover"] == "order"
     assert t.loc[X, "half_width_pp"] > 0
+
+
+def test_arm_tiers_core_and_extended():
+    from dl_item_effects.frame import arm_tiers
+    rows = []
+    # 101..104 are the big sellers; 105 has 2,600 buys but under 2% share; 106 is under 500
+    for item, n in ((101, 40000), (102, 40000), (103, 30000), (104, 20000), (105, 2600),
+                    (106, 499)):
+        rows += [dict(match_id=i, account_id=item, item_id=item, game_time_s=600,
+                      price_paid=3200, full_price=True, sold_time_s=0) for i in range(n)]
+    t = arm_tiers(pd.DataFrame(rows), 3200)
+    assert t == {101: "core", 102: "core", 103: "core", 104: "core", 105: "extended"}
+    assert list(t)[:2] == [101, 102] and list(t)[-1] == 105     # most bought first

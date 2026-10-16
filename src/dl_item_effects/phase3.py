@@ -54,10 +54,18 @@ NC_OUTCOMES = ("nc_player", "nc_next")
 CURVE_GRID_S = np.arange(300, 2701, 150)
 
 
-def results_dir(hero_id: int, patch: str, population: str = "all") -> Path:
+# Default arm set per population (PLAN.md §8, 2026-10-16): all-ranks runs are the core-arm
+# calibration source; Oracle+ reports both tiers. Other combinations get their own folder.
+DEFAULT_ARMS = {"all": "core", "oracle_plus": "extended"}
+
+
+def results_dir(hero_id: int, patch: str, population: str = "all",
+                arm_set: str | None = None) -> Path:
     d = config.PROCESSED_DIR / "results" / f"hero_{hero_id}" / f"patch_{patch}"
     if population != "all":
         d = d / f"pop_{population}"
+    if arm_set and arm_set != DEFAULT_ARMS[population]:
+        d = d / f"arms_{arm_set}"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -85,7 +93,8 @@ def build_calibration(hero_id: int, population: str, source: str, patches: list[
     tabs, scores = [], []
     for patch in patches:
         d = results_dir(hero_id, patch, source)
-        f = [(p, d / f"falsify_{learner}_{p}_nc_next") for p in prices]
+        f = [(p, d / f"falsify_{learner}_{p}_nc_next") for p in prices
+             if (d / f"falsify_{learner}_{p}_nc_next.csv").exists()]
         tabs.append(pd.concat([pd.read_csv(x.with_suffix(".csv")).assign(price=p) for p, x in f],
                               ignore_index=True))
         scores.append(pd.concat([pd.read_parquet(f"{x}_scores.parquet").assign(price=p)
@@ -104,9 +113,12 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder,
     allr = np.ones(len(df), bool)
     tag = f"{stage}_{learner}_{price}"
     t0 = time.monotonic()
+    tiers = dict(zip(df.attrs["arms"], df.attrs.get("arm_tier", ["core"] * len(df.attrs["arms"]))))
+    lab = lambda t: _label(t, decoder, tiers)   # noqa: E731
     e_all = cached_propensities(df, out, learner, "h_all")
     summary = dict(price=price, stage=stage, learner=learner, rows=len(df), dev_rows=int(dev.sum()),
                    arms=_names(decoder, df.attrs["arms"]),
+                   arm_tier=list(tiers.values()),
                    multi_arm_visits=df.attrs["n_multi_arm_visits"],
                    chosen_ineligible=df.attrs["n_chosen_ineligible"],
                    propensity_s=round(time.monotonic() - t0))
@@ -114,7 +126,7 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder,
     if stage == "dev":
         fit = analysis.fit_rows(df, dev, learner, e_hat=e_all[dev])
         tab = effect_table(fit, analysis.next_buy(df, dev))
-        tab.insert(1, "item", _names(decoder, tab["arm"]))
+        tab = lab(tab)
         tab.to_csv(out / f"{tag}_effects.csv", index=False)
         summary.update(trim_share=dict(zip(tab["item"], tab["trim_share"].round(3))),
                        fold_absent=len(fit.fold_absent))
@@ -122,18 +134,16 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder,
     elif stage == "falsify":
         e_nc = cached_propensities(df, out, learner, "h_nc", drop=analysis.NC_PLAYER_DROP)
         p = analysis.nc_player(df, allr, learner, e_all=e_nc)
-        _save_nc(p, out, tag, "nc_player", decoder)
+        _save_nc(p, out, tag, "nc_player", lab)
         nx = analysis.nc_next(df, allr, learner, e_all=e_all)
-        _save_nc(nx, out, tag, "nc_next", decoder)
+        _save_nc(nx, out, tag, "nc_next", lab)
         g = analysis.nc_ingame(df, allr, learner, e_all=e_all)
         for col in ("nc_prior_souls", "nc_prior_deaths"):
-            g[col]["table"].assign(item=_names(decoder, g[col]["table"]["arm"])).to_csv(
-                out / f"{tag}_{col}.csv", index=False)
+            lab(g[col]["table"]).to_csv(out / f"{tag}_{col}.csv", index=False)
         dev_fit = analysis.fit_rows(df, dev, learner, e_hat=e_all[dev])
         c = analysis.se_calibration(dev_fit, reps=200, seed=price)
         s = analysis.split_half(df, allr, learner, seed=price)
-        s["z"].assign(item=_names(decoder, s["z"]["arm"])).to_csv(
-            out / f"{tag}_split_half_z.csv", index=False)
+        lab(s["z"]).to_csv(out / f"{tag}_split_half_z.csv", index=False)
         summary.update(
             nc_player=dict(mu=p["mu"], tau=p["tau"], passed=p["passed"],
                            null_fail_rate=p["null_fail_rate"]),
@@ -149,16 +159,16 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder,
     elif stage == "shuffle":
         e_nc = cached_propensities(df, out, learner, "h_nc", drop=analysis.NC_PLAYER_DROP)
         p = analysis.nc_player_shuffled(df, allr, learner, e_all=e_nc, seed=1)
-        _save_nc(p, out, tag, "nc_player", decoder)
+        _save_nc(p, out, tag, "nc_player", lab)
         summary.update(nc_player_shuffled=dict(mu=p["mu"], tau=p["tau"]))
 
     elif stage == "synth":
         e_nc = cached_propensities(df, out, learner, "h_nc", drop=analysis.NC_PLAYER_DROP)
         p = analysis.nc_player_semisynthetic(df, allr, learner, e_all=e_nc, seed=1)
-        _save_nc(p, out, tag, "nc_player", decoder)
+        _save_nc(p, out, tag, "nc_player", lab)
         nx = analysis.nc_player_semisynthetic(df, allr, learner, e_all=e_all, seed=2,
                                               outcome="nc_next_won", drop=())
-        _save_nc(nx, out, tag, "nc_next", decoder)
+        _save_nc(nx, out, tag, "nc_next", lab)
         summary.update(nc_player_synth=dict(mu=p["mu"], tau=p["tau"], p_sd=p["p_sd"]),
                        nc_next_synth=dict(mu=nx["mu"], tau=nx["tau"], p_sd=nx["p_sd"]))
 
@@ -184,17 +194,19 @@ def run_price(df: pd.DataFrame, stage: str, learner: str, out: Path, decoder,
             sens.append(dict(rv=o["rv"], rva=o["rva"], skill_cf_y=b["cf_y"],
                              skill_cf_d=b["cf_d"], bias_if_as_strong_as_skill=at_skill["bias"]))
         tab = pd.concat([tab, pd.DataFrame(sens)], axis=1)
-        tab.insert(1, "item", _names(decoder, tab["arm"]))
+        tab = lab(tab)
         tab.to_csv(out / f"{tag}_effects.csv", index=False)
         pw = pairwise_table(fit)
         pw.insert(1, "item", _names(decoder, pw["arm"]))
         pw.insert(3, "vs_item", _names(decoder, pw["vs"]))
+        pw["tier"], pw["vs_tier"] = pw["arm"].map(tiers), pw["vs"].map(tiers)
         _add_cal(pw, cal, pairwise=True)
         pw.to_csv(out / f"{tag}_pairwise.csv", index=False)
         t = df.loc[conf, "game_time_s"].to_numpy()
         curves = pd.concat([dr_curve(fit, k, t, CURVE_GRID_S).assign(arm=fit.arms[k])
                             for k in range(len(fit.arms))])
         _add_cal(curves, cal)
+        curves["tier"] = curves["arm"].map(tiers)
         curves.to_csv(out / f"{tag}_curves.csv", index=False)
         summary.update(confirm_rows=int(conf.sum()), fold_absent=len(fit.fold_absent),
                        calibration=cal)
@@ -209,9 +221,16 @@ def _add_cal(t: pd.DataFrame, cal: dict, pairwise: bool = False) -> None:
     t["ci_hi_cal"] = t["effect_cal"] + 1.96 * t["se_cal"]
 
 
-def _save_nc(p: dict, out: Path, tag: str, name: str, decoder) -> None:
-    p["table"].assign(item=_names(decoder, p["table"]["arm"])).to_csv(
-        out / f"{tag}_{name}.csv", index=False)
+def _label(t: pd.DataFrame, decoder, tiers: dict) -> pd.DataFrame:
+    t = t.copy()
+    if "item" not in t:
+        t.insert(1, "item", _names(decoder, t["arm"]))
+    t["tier"] = t["arm"].map(tiers)
+    return t
+
+
+def _save_nc(p: dict, out: Path, tag: str, name: str, lab) -> None:
+    lab(p["table"]).to_csv(out / f"{tag}_{name}.csv", index=False)
     p["scores"].to_parquet(out / f"{tag}_{name}_scores.parquet", index=False)
 
 
@@ -221,8 +240,9 @@ def pool(out: Path, stage: str, learner: str, prices=PRICES, reps: int = 1000) -
     over every price's split-half z."""
     res: dict = dict(stage=stage, learner=learner, prices=list(prices))
     for name in NC_OUTCOMES:
-        files = [(p, out / f"{stage}_{learner}_{p}_{name}") for p in prices]
-        if not all(f.with_suffix(".csv").exists() for _, f in files):
+        files = [(p, out / f"{stage}_{learner}_{p}_{name}") for p in prices
+                 if (out / f"{stage}_{learner}_{p}_{name}.csv").exists()]
+        if not files:
             continue
         tabs = pd.concat([pd.read_csv(f.with_suffix(".csv")).assign(price=p) for p, f in files],
                          ignore_index=True)
@@ -232,8 +252,14 @@ def pool(out: Path, stage: str, learner: str, prices=PRICES, reps: int = 1000) -
         r["bootstrap"] = [analysis.bootstrap_nc(scores, tabs, cluster=c, reps=reps)
                           for c in ("match_id", "account_id")]
         res[name] = r
-    zf = [out / f"{stage}_{learner}_{p}_split_half_z.csv" for p in prices]
-    if all(f.exists() for f in zf):
+        if "tier" in tabs and (tabs["tier"] == "extended").any():
+            core = tabs[tabs["tier"] == "core"]
+            rc = analysis.pooled_nc(core)
+            rc["bootstrap"] = [analysis.bootstrap_nc(scores, core, cluster="match_id", reps=reps)]
+            res[f"{name}_core"] = rc
+    zf = [f for f in (out / f"{stage}_{learner}_{p}_split_half_z.csv" for p in prices)
+          if f.exists()]
+    if zf:
         res["split_half"] = analysis.pooled_split_half(
             pd.concat([pd.read_csv(f) for f in zf], ignore_index=True))
     (out / f"pooled_{stage}_{learner}.json").write_text(json.dumps(res, indent=1, default=float))
@@ -243,9 +269,12 @@ def pool(out: Path, stage: str, learner: str, prices=PRICES, reps: int = 1000) -
 def compare(out: Path, prices=PRICES, alpha: float = 0.05) -> pd.DataFrame:
     rows = []
     for price in prices:
-        a = pd.read_csv(out / f"confirm_logistic_{price}_effects.csv")
-        b = pd.read_csv(out / f"confirm_lgbm_{price}_effects.csv")
-        m = a.merge(b, on=["arm", "item"], suffixes=("_logit", "_lgbm"))
+        fa, fb = (out / f"confirm_{lr}_{price}_effects.csv" for lr in ("logistic", "lgbm"))
+        if not (fa.exists() and fb.exists()):
+            continue
+        a, b = pd.read_csv(fa), pd.read_csv(fb)
+        keys = ["arm", "item"] + (["tier"] if "tier" in a and "tier" in b else [])
+        m = a.merge(b, on=keys, suffixes=("_logit", "_lgbm"))
         m.insert(0, "price", price)
         rows.append(m)
     m = pd.concat(rows, ignore_index=True)
@@ -268,6 +297,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--prices", type=int, nargs="*", default=list(PRICES))
     ap.add_argument("--population", choices=tuple(POPULATIONS), default="oracle_plus",
                     help="match population (PLAN.md §8, 2026-10-15: Oracle 1 and up)")
+    ap.add_argument("--arm-set", choices=("core", "extended"), default=None,
+                    help="default: core for all ranks, extended (both tiers) for Oracle+")
     ap.add_argument("--cal-source", choices=tuple(POPULATIONS), default="all")
     ap.add_argument("--cal-patches", nargs="*", default=["09-16-2026", "09-29-2026"])
     a = ap.parse_args(argv)
@@ -277,7 +308,8 @@ def main(argv: list[str] | None = None) -> None:
                          indent=1, default=float))
         return
 
-    out = results_dir(a.hero, a.patch, a.population)
+    arm_set = a.arm_set or DEFAULT_ARMS[a.population]
+    out = results_dir(a.hero, a.patch, a.population, arm_set)
     if a.stage == "pool":
         for st in ("falsify", "shuffle", "synth"):
             print(json.dumps(pool(out, st, a.learner, a.prices), indent=1, default=float))
@@ -298,30 +330,36 @@ def main(argv: list[str] | None = None) -> None:
         cal = json.loads(f.read_text()) if f.exists() else None
         print(f"calibration: {cal if cal else 'per window, from pooled_falsify_lgbm.json'}",
               flush=True)
-    summaries = []
+    summaries, done = [], []
     for price in a.prices:
         t1 = time.monotonic()
-        df = build_frame(w, price, decoder)
+        try:
+            df = build_frame(w, price, decoder, arm_set=arm_set)
+        except ValueError as e:      # fewer than 2 arms at this price: nothing to compare
+            summaries.append(dict(price=price, stage=a.stage, skipped=str(e)))
+            print(json.dumps(summaries[-1]), flush=True)
+            continue
         s = run_price(df, a.stage, a.learner, out, decoder, cal=cal)
         s["frame_s"] = round(time.monotonic() - t1 - s["wall_s"])
         summaries.append(s)
+        done.append(price)
         print(json.dumps(s, default=float), flush=True)
-    if a.stage == "confirm":
-        # Benjamini-Hochberg across the whole family for this hero and patch (every price), on
-        # the calibrated p-values
-        files = [out / f"confirm_{a.learner}_{p}_effects.csv" for p in a.prices]
-        tabs = [pd.read_csv(f) for f in files]
-        q = benjamini_hochberg(np.concatenate([t["p"].to_numpy() for t in tabs]))
-        i = 0
-        for f, t in zip(files, tabs):
-            t["q"] = q[i:i + len(t)]
-            i += len(t)
-            t.to_csv(f, index=False)
+    if a.stage == "confirm" and done:
+        # Benjamini-Hochberg per tier (PLAN.md §8, 2026-10-16) across every price for this hero
+        # and patch, on the calibrated p-values
+        files = [out / f"confirm_{a.learner}_{p}_effects.csv" for p in done]
+        allt = pd.concat([pd.read_csv(f).assign(_f=i) for i, f in enumerate(files)],
+                         ignore_index=True)
+        allt["q"] = np.nan
+        for _, g in allt.groupby("tier"):
+            allt.loc[g.index, "q"] = benjamini_hochberg(g["p"].to_numpy())
+        for i, f in enumerate(files):
+            allt[allt["_f"] == i].drop(columns="_f").to_csv(f, index=False)
     sfile = out / f"summary_{a.stage}_{a.learner}.json"
     sfile.write_text(json.dumps(summaries, indent=1, default=float))
     print(sfile)
     if a.stage in ("falsify", "shuffle", "synth"):
-        print(json.dumps(pool(out, a.stage, a.learner, a.prices), default=float), flush=True)
+        print(json.dumps(pool(out, a.stage, a.learner, done), default=float), flush=True)
 
 
 if __name__ == "__main__":

@@ -86,6 +86,24 @@ def _with_price(events: pd.DataFrame) -> pd.DataFrame:
     return events.assign(price_paid=events["cost"], full_price=True)
 
 
+# Arm tiers (PLAN.md §8, 2026-10-16): core is the original rule; extended adds every other
+# item with at least EXTENDED_BUYS full-price buys, so underused items get an estimate too.
+CORE_SHARE, CORE_BUYS, EXTENDED_BUYS = 0.02, 2500, 500
+
+
+def arm_tiers(events: pd.DataFrame, price: int) -> dict[int, str]:
+    """Every candidate arm at ``price`` with its tier ("core" or "extended"), most bought
+    first. Uses purchase counts only, never outcomes."""
+    ev = _with_price(events)
+    at = ev[ev["full_price"].astype(bool) & (ev["price_paid"] == price)]
+    if at.empty:
+        return {}
+    n = at.groupby("item_id").size().sort_values(ascending=False)
+    core = (n / n.sum() >= CORE_SHARE) & (n >= CORE_BUYS)
+    return {int(i): ("core" if core[i] else "extended") for i in n.index
+            if core[i] or n[i] >= EXTENDED_BUYS}
+
+
 def support_arms(events: pd.DataFrame, price: int, min_share: float = 0.02,
                  min_buys: int = 2500) -> list[int]:
     """On-support arms at ``price``: full-price items with at least ``min_share`` of that
@@ -103,18 +121,21 @@ def support_arms(events: pd.DataFrame, price: int, min_share: float = 0.02,
 def decision_frame(events: pd.DataFrame, price: int, arms: list[int] | None = None,
                    own_items: list[int] | None = None,
                    components: dict[int, tuple[int, ...]] | None = None,
-                   visit_gap_s: float = 30, min_share: float = 0.02,
-                   min_buys: int = 2500) -> pd.DataFrame:
+                   visit_gap_s: float = 30, arm_set: str = "extended") -> pd.DataFrame:
     """One row per shop visit that buys exactly one on-support arm at full ``price``.
 
     ``events`` is one hero's purchase table (all prices). ``components`` maps an item to
     every component it upgrades from, at any depth (``ItemDecoder.component_closure``).
     Adds ``arm`` (index into ``df.attrs['arms']``), ``elig_<k>``, ``own_<item>`` for
     ``own_items`` (default: every item this hero buys), ``next_<k>``, and ``lane_<n>``.
+    Without ``arms``, the arms are the core tier (``arm_set="core"``) or both tiers
+    (``"extended"``, the default); ``attrs['arm_tier']`` labels each.
     """
     events = assign_visits(_with_price(events).reset_index(drop=True), visit_gap_s)
     events["item_id"] = events["item_id"].astype("int64")   # parquet gives uint64
-    arms = arms if arms is not None else support_arms(events, price, min_share, min_buys)
+    tiers = arm_tiers(events, price)
+    if arms is None:
+        arms = [a for a, t in tiers.items() if arm_set == "extended" or t == "core"]
     if len(arms) < 2:
         raise ValueError(f"price {price}: fewer than 2 on-support arms ({arms})")
     components = components or {}
@@ -172,7 +193,7 @@ def decision_frame(events: pd.DataFrame, price: int, arms: list[int] | None = No
     own = own[[f"own_{i}" for i in own_items]]
     df = pd.concat([df.reset_index(drop=True), own.reset_index(drop=True)], axis=1)
     df["won"] = df["won"].astype(int)
-    df.attrs.update(arms=arms, price=price, own_cols=list(own.columns), lane_cols=lane_cols,
+    df.attrs.update(arms=arms, arm_tier=[tiers.get(int(a), "core") for a in arms], price=price, own_cols=list(own.columns), lane_cols=lane_cols,
                     next_cols=[f"next_{k}" for k in range(len(arms))],
                     n_multi_arm_visits=n_multi, n_chosen_ineligible=n_bad,
                     visit_gap_s=visit_gap_s)
