@@ -219,6 +219,15 @@ every cached table and page.
 - Effects are specific to a patch. Every table is labelled with its patch.
 
 ## 8. Decision log (newest first)
+- **2026-10-16** (Will): **production runs use only the latest patch** (currently
+  09-29-2026). It halves compute and matches what Will cares about.
+  - Two windows had been kept for validation, not for sample size: cross-window replication,
+    §4.5 patch diff-in-diff, and §3.7 pooling for unchanged items.
+  - Haze's two-window results stay as the replication evidence (core items r 0.63). §4.5
+    becomes a periodic check on a few heroes.
+  - The latest window should be re-extracted through the latest day; the days after 10-12
+    are also a hold-out the design has never seen (`docs/METHOD_REVIEW.md` D1).
+  - Not yet implemented (`docs/METHOD_REVIEW.md` §7 T1).
 - **2026-10-16** (Will): **two item tiers.**
   - **Core:** the original rule, at least 2% of the price's full-price buys and 2,500 buys
     per hero and window.

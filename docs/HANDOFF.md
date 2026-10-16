@@ -4,6 +4,24 @@ Written 2026-10-14 for an agent starting with a fresh context. Read this first, 
 [`PLAN.md`](../PLAN.md). Everything below was checked against the repo and data on disk at the
 time of writing.
 
+## 0d. Start here (2026-10-16): read `docs/METHOD_REVIEW.md`
+
+[`METHOD_REVIEW.md`](METHOD_REVIEW.md) is the complete, current reference. It covers every
+calculation from extraction to the reported numbers, the issues log with evidence and severity,
+what is done, and a prioritized to-do list with Will's pending decisions marked. Sections §0a
+to §0c below are the running history behind it.
+
+Since §0c:
+- The logistic pass was stopped at Will's request: 2 of 16 frames done; it is far too slow
+  (issue F1).
+- A dashboard of the Haze and Billy results was built:
+  https://claude.ai/artifact/8F558Frfg4Mq6zvqLehn8w (a fixed copy of the data). Its first
+  version crashed on `d3.randomLcg`, which that dashboard's d3 lacks; fixed.
+- Will decided that production uses only the latest patch (PLAN §8, 2026-10-16). Not yet
+  implemented.
+- A first LightGBM vs logistic comparison (Haze 09-16, 800 and 1600) shows common items agree
+  (r 0.80) and rare items do not (r 0.45).
+
 ## 0c. Update, 2026-10-16 morning: Haze + Billy, two item tiers, overnight run (read first)
 
 **Decisions since §0b (all in PLAN §8):**
